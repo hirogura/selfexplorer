@@ -62,5 +62,17 @@ sudo systemctl start selfexplorer
 
 ## アクセス
 
-- SelfExplorer: http://localhost:3346 (デフォルト)
-- Tailscale 経由: Tailscale Serve が有効な場合 HTTPS でもアクセス可
+SelfExplorer は `127.0.0.1` にのみバインドされているため、**Tailnet（Tailscale）内からしかアクセスできません**。LAN やインターネットからの直接アクセスはできません。
+
+- サーバー上: http://localhost:3346
+- Tailnet 内: https://`<hostname>.ts.net:3346` (Tailscale Serve が有効な場合)
+- OnlyOffice: https://`<hostname>.ts.net:3322` (こちらも Tailnet 内のみ)
+
+### ネットワーク構成
+
+| サービス | バインド | 公開範囲 |
+|---|---|---|
+| SelfExplorer (3346) | `127.0.0.1` | Tailnet 内のみ |
+| OnlyOffice (3322) | `127.0.0.1` | Tailnet 内のみ |
+
+## 要件
