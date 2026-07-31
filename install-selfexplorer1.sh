@@ -224,7 +224,9 @@ if systemctl is-active --quiet "${SERVICE_NAME}" 2>/dev/null; then
   systemctl kill "${SERVICE_NAME}" 2>/dev/null || true
 fi
 # ポートを占有している全プロセスを強制停止
-pkill -f "node.*server.js" 2>/dev/null || true
+# 注意: パターンは自分自身 (bash -c "$(curl...)") にマッチしないように
+# [.] の文字クラスで自己マッチを回避する
+pkill -f "node server[.]js" 2>/dev/null || true
 sleep 2
 
 # ── サービス起動 ─────────────────────────────────────────────────────────────
