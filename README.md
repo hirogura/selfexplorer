@@ -76,3 +76,38 @@ SelfExplorer は `127.0.0.1` にのみバインドされているため、**Tail
 |---|---|---|
 | SelfExplorer (3346) | `127.0.0.1` | Tailnet 内のみ |
 | OnlyOffice (3322) | `127.0.0.1` | Tailnet 内のみ |
+
+
+### アンインストール方法
+
+以下の手順でアンインストールできます。
+
+```bash
+# 1. サービスを停止・無効化
+sudo systemctl stop selfexplorer
+sudo systemctl disable selfexplorer
+
+# 2. systemd サービスファイルを削除
+sudo rm /etc/systemd/system/selfexplorer.service
+sudo systemctl daemon-reload
+
+# 3. インストールディレクトリを削除
+sudo rm -rf /opt/selfexplorer
+
+# 4. Tailscale Serve の設定を解除
+tailscale serve --https=3346 off
+```
+
+注意点:
+
+/opt/lxd-data（ブラウズ対象のデータ）は削除されません — SelfExplorer はこのフォルダの中身を表示していただけなので、実データはそのまま残ります。他のサービス（EasyNote改めSelfNote等）も同じ /opt/lxd-data を共有している場合は特に、このディレクトリは消さないでください。
+OnlyOffice(/opt/onlyoffice)は、インストール時に「既存環境を再利用」を選んだ場合は他のサービス(nextExplorer等)とも共有されている可能性があります。SelfExplorer専用に新規インストールしていて、かつ他で使っていないなら削除可能です
+
+```bash
+cd /opt/onlyoffice && sudo docker compose down
+sudo rm -rf /opt/onlyoffice
+```
+
+ただし共有している場合は残しておいてください。
+
+ポート 3346(SelfExplorer本体)・3322(OnlyOffice)を他で使っていないか確認してから解放するのが安全です。
