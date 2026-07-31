@@ -1,0 +1,16 @@
+# Dependencies
+node_modules/
+
+# Server (contains security keys / secrets)
+server/server.js
+
+# Environment files & secrets
+.env
+.env.*
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Logs
+*.log
