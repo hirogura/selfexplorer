@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SelfExplorer - OnlyOffice Editor</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; overflow: hidden; }
+    #placeholder { width: 100%; height: 100%; }
+    .loading { display: flex; align-items: center; justify-content: center; width: 100%; height: 100%; font-family: sans-serif; color: #666; }
+  </style>
+</head>
+<body>
+  <div id="placeholder"><div class="loading">エディタを読み込み中...</div></div>
+  <script>
+    const params = new URLSearchParams(window.location.search);
+    const filePath = params.get('path');
+    if (!filePath) {
+      document.getElementById('placeholder').innerHTML = '<div class="loading">ファイルが指定されていません</div>';
+    } else {
+      fetch(`/api/onlyoffice/config?path=${encodeURIComponent(filePath)}`)
+        .then(r => r.json())
+        .then(data => {
+          if (!data.success) { document.getElementById('placeholder').innerHTML = `<div class="loading">エラー: ${data.error}</div>`; return; }
+          const script = document.createElement('script');
+          script.src = `${data.editorUrl}/web-apps/apps/api/documents/api.js`;
+          script.onload = () => { try { new DocsAPI.DocEditor('placeholder', data.config); } catch (e) { document.getElementById('placeholder').innerHTML = `<div class="loading">エディタの初期化に失敗しました: ${e.message}</div>`; } };
+          script.onerror = () => { document.getElementById('placeholder').innerHTML = '<div class="loading">OnlyOffice スクリプトの読み込みに失敗しました</div>'; };
+          document.head.appendChild(script);
+        })
+        .catch(e => { document.getElementById('placeholder').innerHTML = `<div class="loading">エラー: ${e.message}</div>`; });
+    }
+  </script>
+</body>
+</html>
