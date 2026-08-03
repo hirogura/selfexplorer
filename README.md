@@ -55,6 +55,27 @@ sudo systemctl start selfexplorer
 
 `install-selfexplorer1.sh` をダウンロードして実行するか、上記のクイックインストールコマンドを実行してください。
 
+## OnlyOffice フォント追加（オプション）
+
+OnlyOffice で日本語などのフォントを正しく表示するには、`/opt/lxd-data/Fonts/` にフォントファイル（ttf / otf / woff / woff2）を配置してから、以下のスクリプトを実行します。
+
+```bash
+sudo bash -c "$(curl -fsSL https://raw.githubusercontent.com/hirogura/selfexplorer/main/add-fonts.sh)"
+```
+
+このスクリプトは以下の処理を行います:
+
+1. `/opt/lxd-data/Fonts/` を OnlyOffice コンテナの `/usr/share/fonts/custom` に read-only マウントで追加（`docker-compose.yml` を自動更新）
+2. 変更前の `docker-compose.yml` をタイムスタンプ付きでバックアップ
+3. コンテナを再作成（データは保持）
+4. コンテナ内でフォントキャッシュを再生成（`fc-cache` / AllFonts.js / テーマ再生成）
+
+注意:
+
+- 実行前に `/opt/lxd-data/Fonts/` にフォントファイルを配置しておいてください（ファイルが 1 件も無い場合は中断します）
+- 再実行しても安全です（マウントが既にあればキャッシュ再生成のみ行います）
+- 完了後はブラウザキャッシュをクリアしてから OnlyOffice でフォントを確認してください
+
 ## 要件
 
 - Node.js 18 以上
