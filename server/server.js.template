@@ -1,0 +1,417 @@
+#!/usr/bin/env node
+'use strict';
+
+const express = require('express');
+const multer = require('multer');
+const mime = require('mime-types');
+const archiver = require('archiver');
+const path = require('path');
+const fs = require('fs');
+const crypto = require('crypto');
+
+const PORT = parseInt(process.env.PORT || '__PORT__', 10);
+const OO_PORT = parseInt(process.env.ONLYOFFICE_PORT || '__OO_PORT__', 10);
+const HOST = '127.0.0.1';
+const ROOT_DIR = path.resolve(process.env.ROOT_DIR || '__ROOT_DIR__');
+const ONLYOFFICE_URL = (process.env.ONLYOFFICE_URL || '').replace(/\/+$/, '');
+const ONLYOFFICE_SECRET = process.env.ONLYOFFICE_SECRET || '__OO_SECRET__';
+const PUBLIC_URL = (process.env.PUBLIC_URL || '').replace(/\/+$/, '');
+
+const app = express();
+app.use(express.json({ limit: '20mb' }));
+
+function sendErr(res, msg, status) {
+  return res.status(status || 400).json({ success: false, error: msg });
+}
+
+function toRel(abs) {
+  return path.relative(ROOT_DIR, abs).split(path.sep).join('/');
+}
+
+function safeResolve(p) {
+  const abs = path.resolve(ROOT_DIR, String(p || ''));
+  const check = path.relative(ROOT_DIR, abs);
+  if (check === '..' || check.startsWith('..' + path.sep) || path.isAbsolute(check)) {
+    const e = new Error('Invalid path');
+    e.status = 400;
+    throw e;
+  }
+  return abs;
+}
+
+function isDir(p) {
+  return fs.statSync(p).isDirectory();
+}
+
+async function hasChildren(dir) {
+  try {
+    const entries = await fs.promises.readdir(dir);
+    for (const name of entries) {
+      if (fs.statSync(path.join(dir, name)).isDirectory()) return true;
+    }
+  } catch (e) {}
+  return false;
+}
+
+function b64url(buf) {
+  return Buffer.from(buf).toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+function signJwt(payload) {
+  const header = b64url(JSON.stringify({ alg: 'HS256', typ: 'JWT' }));
+  const body = b64url(JSON.stringify(payload));
+  const sig = crypto.createHmac('sha256', ONLYOFFICE_SECRET).update(header + '.' + body).digest();
+  return header + '.' + body + '.' + b64url(sig);
+}
+
+function verifyJwt(token) {
+  const parts = String(token || '').split('.');
+  if (parts.length !== 3) return null;
+  const [h, b, s] = parts;
+  const expected = crypto.createHmac('sha256', ONLYOFFICE_SECRET).update(h + '.' + b).digest();
+  let sig;
+  try { sig = Buffer.from(s, 'base64url'); } catch (e) { return null; }
+  if (expected.length !== sig.length || !crypto.timingSafeEqual(expected, sig)) return null;
+  try { return JSON.parse(Buffer.from(b, 'base64url').toString('utf8')); } catch (e) { return null; }
+}
+
+function getDocType(ext) {
+  const map = {
+    '.docx': 'word', '.doc': 'word', '.odt': 'word', '.rtf': 'word', '.txt': 'word', '.md': 'word',
+    '.xlsx': 'cell', '.xls': 'cell', '.ods': 'cell', '.csv': 'cell',
+    '.pptx': 'slide', '.ppt': 'slide', '.odp': 'slide'
+  };
+  return map[ext.toLowerCase()] || 'word';
+}
+
+function isLocalHost(host) {
+  return /^(127\.0\.0\.1|localhost)(:|$)/i.test(host);
+}
+
+function publicProto(req) {
+  const p = req.headers['x-forwarded-proto'];
+  if (p) return p.split(',')[0].trim();
+  return isLocalHost(publicHost(req)) ? 'http' : 'https';
+}
+
+function publicHost(req) {
+  const h = req.headers['x-forwarded-host'];
+  if (h) return h.split(',')[0].trim();
+  return req.headers.host || ('127.0.0.1:' + PORT);
+}
+
+function swapPort(host, port) {
+  return host.replace(/:\d+$/, ':' + port);
+}
+
+function docBase(req) {
+  if (PUBLIC_URL) return PUBLIC_URL;
+  const host = publicHost(req);
+  if (isLocalHost(host)) return 'http://host.docker.internal:' + PORT;
+  return publicProto(req) + '://' + host;
+}
+
+function streamFile(file, res) {
+  const st = fs.statSync(file);
+  res.setHeader('Content-Type', mime.lookup(file) || 'application/octet-stream');
+  res.setHeader('Content-Length', st.size);
+  fs.createReadStream(file).on('error', () => res.status(404).end()).pipe(res);
+}
+
+app.use(express.static(path.join(__dirname, '..', 'public')));
+
+app.get('/api/browse', async (req, res) => {
+  try {
+    const dir = safeResolve(req.query.path);
+    if (!isDir(dir)) return sendErr(res, 'フォルダではありません');
+    const entries = await fs.promises.readdir(dir, { withFileTypes: true });
+    const items = [];
+    for (const ent of entries) {
+      const full = path.join(dir, ent.name);
+      let st;
+      try { st = await fs.promises.stat(full); } catch (e) { continue; }
+      items.push({
+        name: ent.name,
+        path: toRel(full),
+        isDirectory: ent.isDirectory(),
+        size: ent.isDirectory() ? 0 : st.size,
+        extension: ent.isDirectory() ? '' : path.extname(ent.name).toLowerCase(),
+        modified: st.mtime.toISOString(),
+        hasChildren: ent.isDirectory() ? await hasChildren(full) : false
+      });
+    }
+    res.json({ success: true, items });
+  } catch (e) {
+    sendErr(res, e.message, e.status || 400);
+  }
+});
+
+app.get('/api/tree', async (req, res) => {
+  try {
+    const dir = safeResolve(req.query.path);
+    const entries = await fs.promises.readdir(dir, { withFileTypes: true });
+    const items = [];
+    for (const ent of entries) {
+      if (!ent.isDirectory()) continue;
+      const full = path.join(dir, ent.name);
+      items.push({ name: ent.name, path: toRel(full), hasChildren: await hasChildren(full) });
+    }
+    res.json({ success: true, items });
+  } catch (e) {
+    sendErr(res, e.message, e.status || 400);
+  }
+});
+
+app.get('/api/thumbnail', (req, res) => {
+  try {
+    const file = safeResolve(req.query.path);
+    const type = mime.lookup(file) || 'application/octet-stream';
+    if (!type.startsWith('image/')) return sendErr(res, '画像ではありません', 415);
+    res.setHeader('Content-Type', type);
+    fs.createReadStream(file).on('error', () => res.status(404).end()).pipe(res);
+  } catch (e) {
+    sendErr(res, e.message, e.status || 400);
+  }
+});
+
+app.get('/api/view', (req, res) => {
+  try {
+    const file = safeResolve(req.query.path);
+    if (isDir(file)) return sendErr(res, 'フォルダです');
+    res.setHeader('Content-Disposition', 'inline; filename="' + encodeURIComponent(path.basename(file)) + '"');
+    streamFile(file, res);
+  } catch (e) {
+    sendErr(res, e.message, e.status || 400);
+  }
+});
+
+app.get('/api/download', (req, res) => {
+  try {
+    const file = safeResolve(req.query.path);
+    if (isDir(file)) {
+      res.setHeader('Content-Type', 'application/zip');
+      res.setHeader('Content-Disposition', 'attachment; filename="' + encodeURIComponent(path.basename(file)) + '.zip"');
+      const archive = archiver('zip', { zlib: { level: 6 } });
+      archive.on('error', () => res.status(500).end());
+      archive.pipe(res);
+      archive.directory(file, path.basename(file));
+      archive.finalize();
+      return;
+    }
+    res.setHeader('Content-Disposition', 'attachment; filename="' + encodeURIComponent(path.basename(file)) + '"');
+    streamFile(file, res);
+  } catch (e) {
+    sendErr(res, e.message, e.status || 400);
+  }
+});
+
+app.post('/api/download-batch', (req, res) => {
+  const paths = Array.isArray(req.body.paths) ? req.body.paths : [];
+  res.setHeader('Content-Type', 'application/zip');
+  res.setHeader('Content-Disposition', 'attachment; filename="download.zip"');
+  const archive = archiver('zip', { zlib: { level: 6 } });
+  archive.on('error', () => res.status(500).end());
+  archive.pipe(res);
+  const seen = new Set();
+  for (const p of paths) {
+    try {
+      const abs = safeResolve(p);
+      const name = p || path.basename(abs);
+      if (seen.has(name)) continue;
+      seen.add(name);
+      if (isDir(abs)) archive.directory(abs, name);
+      else archive.file(abs, { name });
+    } catch (e) {}
+  }
+  archive.finalize();
+});
+
+app.post('/api/move', (req, res) => {
+  try {
+    const src = safeResolve(req.body.sourcePath);
+    const destDir = safeResolve(req.body.destPath);
+    if (!isDir(destDir)) return sendErr(res, '移動先がフォルダではありません');
+    const dest = path.join(destDir, path.basename(src));
+    if (src !== dest) fs.renameSync(src, dest);
+    res.json({ success: true });
+  } catch (e) {
+    sendErr(res, e.message, e.status || 400);
+  }
+});
+
+app.post('/api/move-batch', (req, res) => {
+  const paths = Array.isArray(req.body.paths) ? req.body.paths : [];
+  let destDir;
+  try { destDir = safeResolve(req.body.destPath); } catch (e) { return sendErr(res, e.message); }
+  const errors = [];
+  let moved = 0;
+  for (const p of paths) {
+    try {
+      const src = safeResolve(p);
+      const dest = path.join(destDir, path.basename(src));
+      if (src === dest) continue;
+      fs.renameSync(src, dest);
+      moved++;
+    } catch (e) {
+      errors.push({ path: p, error: e.message });
+    }
+  }
+  res.json({ success: true, moved, errors });
+});
+
+app.post('/api/delete', (req, res) => {
+  try {
+    const abs = safeResolve(req.body.path);
+    fs.rmSync(abs, { recursive: true, force: true });
+    res.json({ success: true });
+  } catch (e) {
+    sendErr(res, e.message, e.status || 400);
+  }
+});
+
+app.post('/api/delete-batch', (req, res) => {
+  const paths = Array.isArray(req.body.paths) ? req.body.paths : [];
+  for (const p of paths) {
+    try { fs.rmSync(safeResolve(p), { recursive: true, force: true }); } catch (e) {}
+  }
+  res.json({ success: true });
+});
+
+app.post('/api/rename', (req, res) => {
+  try {
+    const oldAbs = safeResolve(req.body.oldPath);
+    const newName = String(req.body.newName || '').trim();
+    if (!newName || newName.includes('/') || newName.includes('\\')) return sendErr(res, '名前が不正です');
+    const newAbs = path.join(path.dirname(oldAbs), newName);
+    if (fs.existsSync(newAbs)) return sendErr(res, '同じ名前のファイルが存在します');
+    fs.renameSync(oldAbs, newAbs);
+    res.json({ success: true });
+  } catch (e) {
+    sendErr(res, e.message, e.status || 400);
+  }
+});
+
+app.post('/api/mkdir', (req, res) => {
+  try {
+    const dir = safeResolve(req.body.path);
+    const name = String(req.body.name || '').trim();
+    if (!name || name.includes('/') || name.includes('\\')) return sendErr(res, '名前が不正です');
+    const target = path.join(dir, name);
+    if (fs.existsSync(target)) return sendErr(res, '同じ名前のフォルダが存在します');
+    fs.mkdirSync(target);
+    res.json({ success: true });
+  } catch (e) {
+    sendErr(res, e.message, e.status || 400);
+  }
+});
+
+app.post('/api/createfile', (req, res) => {
+  try {
+    const dir = safeResolve(req.body.path);
+    const name = String(req.body.name || '').trim();
+    const type = String(req.body.type || '.txt');
+    if (!name || name.includes('/') || name.includes('\\')) return sendErr(res, '名前が不正です');
+    const ext = type.startsWith('.') ? type : '.' + type;
+    const target = path.join(dir, name + ext);
+    if (fs.existsSync(target)) return sendErr(res, '同じ名前のファイルが存在します');
+    fs.writeFileSync(target, '');
+    res.json({ success: true });
+  } catch (e) {
+    sendErr(res, e.message, e.status || 400);
+  }
+});
+
+const uploader = multer({
+  storage: multer.diskStorage({
+    destination: (req, file, cb) => {
+      try { cb(null, safeResolve(req.query.path)); } catch (e) { cb(e); }
+    },
+    filename: (req, file, cb) => {
+      cb(null, path.basename(file.originalname).replace(/[\\/:*?"<>|]/g, '_'));
+    }
+  }),
+  limits: { fileSize: 2 * 1024 * 1024 * 1024 }
+});
+
+app.post('/api/upload', (req, res) => {
+  uploader.array('files')(req, res, (err) => {
+    if (err) return sendErr(res, err.message);
+    res.json({ success: true });
+  });
+});
+
+app.get('/api/info', (req, res) => {
+  try {
+    const abs = safeResolve(req.query.path);
+    const st = fs.statSync(abs);
+    res.json({ success: true, info: {
+      name: path.basename(abs),
+      path: toRel(abs),
+      isDirectory: st.isDirectory(),
+      size: st.size,
+      modified: st.mtime.toISOString(),
+      created: st.birthtime.toISOString(),
+      permissions: (st.mode & 0o777).toString(8)
+    }});
+  } catch (e) {
+    sendErr(res, e.message, e.status || 400);
+  }
+});
+
+app.get('/api/onlyoffice/config', (req, res) => {
+  try {
+    const filePath = String(req.query.path || '');
+    const abs = safeResolve(filePath);
+    if (!fs.existsSync(abs) || isDir(abs)) return sendErr(res, '編集できないファイルです');
+    const ext = path.extname(abs).toLowerCase();
+    const name = path.basename(abs);
+    const key = crypto.createHash('md5').update(filePath + ':' + fs.statSync(abs).mtimeMs).digest('hex');
+    const proto = publicProto(req);
+    const host = publicHost(req);
+    const editorUrl = ONLYOFFICE_URL || (proto + '://' + swapPort(host, OO_PORT));
+    const base = docBase(req);
+    const config = {
+      document: {
+        fileType: ext.replace('.', ''),
+        key,
+        title: name,
+        url: base + '/api/view?path=' + encodeURIComponent(filePath),
+        permissions: { edit: true, download: true, print: true }
+      },
+      editorConfig: {
+        mode: 'edit',
+        lang: 'ja-JP',
+        callbackUrl: base + '/api/onlyoffice/callback?path=' + encodeURIComponent(filePath)
+      },
+      documentType: getDocType(ext)
+    };
+    if (ONLYOFFICE_SECRET) config.token = signJwt(config);
+    res.json({ success: true, editorUrl, config });
+  } catch (e) {
+    sendErr(res, e.message, e.status || 400);
+  }
+});
+
+app.post('/api/onlyoffice/callback', async (req, res) => {
+  try {
+    const body = req.body || {};
+    if (ONLYOFFICE_SECRET && !verifyJwt(body.token)) {
+      return res.json({ error: 1 });
+    }
+    if (body.status === 2 && body.url) {
+      const abs = safeResolve(req.query.path);
+      const resp = await fetch(body.url);
+      if (!resp.ok) return res.json({ error: 1 });
+      const data = Buffer.from(await resp.arrayBuffer());
+      await fs.promises.writeFile(abs, data);
+    }
+    res.json({ error: 0 });
+  } catch (e) {
+    res.json({ error: 1 });
+  }
+});
+
+app.listen(PORT, HOST, () => {
+  console.log(`SelfExplorer listening on http://${HOST}:${PORT}`);
+  console.log(`Root: ${ROOT_DIR}`);
+});

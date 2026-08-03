@@ -131,12 +131,17 @@ else
   OO_SECRET=$(python3 -c "import secrets; print(secrets.token_hex(32))")
 fi
 
-# ── 設定を反映 (sed で server.js / app.js の値を書き換え) ──────────────────────
+# ── 設定を反映 (server.js.template から生成 / app.js を書き換え) ──────────────
+# 注意: server.js はシークレットを含むためリポジトリに含めない
+#       (.gitignore で追跡除外)。テンプレートから生成する。
 info "設定を反映..."
-sed -i "s,^const PORT = [0-9]*;,const PORT = ${PORT};," "${INSTALL_DIR}/server/server.js"
-sed -i "s,^const ROOT_DIR = '.*';,const ROOT_DIR = '${BROWSE_ROOT}';," "${INSTALL_DIR}/server/server.js"
-sed -i "s,process.env.ONLYOFFICE_URL || 'http://127.0.0.1:[0-9]*',process.env.ONLYOFFICE_URL || 'http://127.0.0.1:${OO_PORT}'," "${INSTALL_DIR}/server/server.js"
-sed -i "s,process.env.ONLYOFFICE_SECRET || '[^']*',process.env.ONLYOFFICE_SECRET || '${OO_SECRET}'," "${INSTALL_DIR}/server/server.js"
+if [ ! -f "${INSTALL_DIR}/server/server.js" ] || [ "${REUSE_EXISTING_OO}" != "y" ]; then
+  cp -f "${INSTALL_DIR}/server/server.js.template" "${INSTALL_DIR}/server/server.js"
+fi
+sed -i "s,__PORT__,${PORT},g" "${INSTALL_DIR}/server/server.js"
+sed -i "s,__ROOT_DIR__,${BROWSE_ROOT},g" "${INSTALL_DIR}/server/server.js"
+sed -i "s,__OO_PORT__,${OO_PORT},g" "${INSTALL_DIR}/server/server.js"
+sed -i "s,__OO_SECRET__,${OO_SECRET},g" "${INSTALL_DIR}/server/server.js"
 sed -i "s,const ROOT_PREFIX='[^']*',const ROOT_PREFIX='${BROWSE_ROOT}'," "${INSTALL_DIR}/public/js/app.js"
 ok "設定反映完了"
 
@@ -164,6 +169,8 @@ services:
     environment:
       JWT_ENABLED: "true"
       JWT_SECRET: "${OO_SECRET}"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - /opt/onlyoffice/logs:/var/log/onlyoffice
       - /opt/onlyoffice/data:/var/www/onlyoffice/Data
