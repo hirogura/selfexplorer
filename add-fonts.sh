@@ -116,22 +116,35 @@ docker exec onlyoffice bash -c "
   fc-cache -f -v /usr/share/fonts/custom 2>&1 | tail -5
 
   echo '[2/4] AllFonts.js を生成...'
-  cd /var/www/onlyoffice/documentserver
-  (
-    set -o pipefail
-    node core/DocService/sources/AllFontsGen.js \
-      --fonts-dir=/usr/share/fonts \
-      --out=/var/www/onlyoffice/documentserver/core-fonts 2>&1 | tail -5 || \
-    node tools/fontgen/allfonts.js 2>&1 | tail -5 || \
-    /usr/bin/documentserver-generate-allfonts.sh 2>&1 | tail -5 || \
-    true
-  )
+  # 公式スクリプトを優先（node が PATH に無いイメージでもノイズが出ないようにする）
+  if [[ -x /usr/bin/documentserver-generate-allfonts.sh ]]; then
+    /usr/bin/documentserver-generate-allfonts.sh 2>&1 | tail -5
+  else
+    cd /var/www/onlyoffice/documentserver
+    (
+      set -o pipefail
+      node core/DocService/sources/AllFontsGen.js \
+        --fonts-dir=/usr/share/fonts \
+        --out=/var/www/onlyoffice/documentserver/core-fonts 2>&1 | tail -5 || \
+      node tools/fontgen/allfonts.js 2>&1 | tail -5 || \
+      true
+    )
+  fi
 
   echo '[3/4] プレゼンテーションテーマを再生成...'
-  /usr/bin/documentserver-generate-all-themes.sh 2>&1 | tail -3 || true
+  # イメージによってはスクリプトが存在しないため、あれば実行・無ければスキップ
+  if [[ -x /usr/bin/documentserver-generate-all-themes.sh ]]; then
+    /usr/bin/documentserver-generate-all-themes.sh 2>&1 | tail -3
+  else
+    echo 'テーマ再生成スクリプトがこのイメージにはありません（スキップ）'
+  fi
 
   echo '[4/4] JS キャッシュを再生成...'
-  /usr/bin/documentserver-pluginsmanager.sh 2>&1 | tail -3 || true
+  if command -v documentserver-pluginsmanager.sh >/dev/null 2>&1; then
+    documentserver-pluginsmanager.sh 2>&1 | tail -3
+  else
+    echo 'pluginsmanager スクリプトが見つかりません（スキップ）'
+  fi
 "
 
 # ── nginx リロード ─────────────────────────────────────────────────────────────
