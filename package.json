@@ -1,6 +1,6 @@
 {
   "name": "selfexplorer",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "private": true,
   "description": "SelfExplorer - web based file manager with OnlyOffice integration"
 }

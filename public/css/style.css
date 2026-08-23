@@ -171,6 +171,7 @@ body{font-family:"Segoe UI Variable","Segoe UI",system-ui,-apple-system,sans-ser
 .oo-env{font-size:11px;color:var(--text-secondary)}
 .oo-env-ok{color:#2da44e;font-weight:600}
 .oo-env-ng{color:var(--danger-color);font-weight:600}
+.oo-env-warn{color:#9a6700;font-weight:600}
 .oo-notice{display:none;border:1px solid #f0c36d;background:#fff8e6;border-radius:var(--radius-sm);padding:8px 10px;font-size:12px;color:#6b5200;line-height:1.5}
 .oo-notice.show{display:block}
 .oo-notice-title{font-weight:600;margin-bottom:4px;color:#7a5b00}
