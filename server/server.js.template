@@ -20,6 +20,10 @@ const PUBLIC_URL = (process.env.PUBLIC_URL || '').replace(/\/+$/, '');
 const OO_DIR = '/opt/onlyoffice';
 const OO_COMPOSE_FILE = path.join(OO_DIR, 'docker-compose.yml');
 const OO_SERVICE_NAME = 'selfexplorer';
+const FONT_DIR = path.join(ROOT_DIR, 'Fonts');
+const FF_SCRIPT = path.join(__dirname, '..', 'add-fonts.sh');
+const { spawn } = require('child_process');
+const PKG = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8'));
 
 function sh(cmd, args, opts = {}) {
   return new Promise((resolve, reject) => {
@@ -144,6 +148,35 @@ async function ooEnvCheck() {
   const nestingOk = isLxc ? (nestingProfile || capSysAdmin === true) : true;
   return { virt, isLxc, containerName, hostName, nestingProfile, capSysAdmin, nestingOk };
 }
+
+/* ── フォント追加（add-fonts.sh 連携） ── */
+function ffDirExists() {
+  try { return fs.statSync(FONT_DIR).isDirectory(); } catch (e) { return false; }
+}
+
+function ffCountFonts() {
+  const re = /\.(ttf|otf|woff2?)$/i;
+  let n = 0;
+  try {
+    for (const e of fs.readdirSync(FONT_DIR, { withFileTypes: true })) {
+      if (e.isFile() && re.test(e.name)) n++;
+      else if (e.isDirectory()) {
+        try {
+          for (const e2 of fs.readdirSync(path.join(FONT_DIR, e.name), { withFileTypes: true })) {
+            if (e2.isFile() && re.test(e2.name)) n++;
+          }
+        } catch (err) {}
+      }
+    }
+  } catch (e) {}
+  return n;
+}
+
+function ffMounted() {
+  try { return fs.readFileSync(OO_COMPOSE_FILE, 'utf8').includes('/usr/share/fonts/custom'); } catch (e) { return false; }
+}
+
+let ffInstalling = false;
 
 /* Nesting の自動変更はホスト側 lxc CLI が利用できる場合のみ試みる */
 async function ooTryEnableNesting(name) {
@@ -734,6 +767,143 @@ app.get('/api/onlyoffice/install', (req, res) => {
       ooInstalling = false;
     }
   })();
+});
+
+app.get('/api/fonts/status', async (req, res) => {
+  try {
+    const dirExists = ffDirExists();
+    const fontCount = dirExists ? ffCountFonts() : 0;
+    let containerRunning = false;
+    if (fs.existsSync(OO_COMPOSE_FILE)) containerRunning = await ooContainerRunning();
+    res.json({
+      success: true,
+      dirExists,
+      fontCount,
+      mounted: ffMounted(),
+      onlyOfficeRunning: containerRunning,
+      busy: ffInstalling,
+      relPath: toRel(FONT_DIR),
+      absPath: FONT_DIR
+    });
+  } catch (e) {
+    sendErr(res, e.message, e.status || 500);
+  }
+});
+
+app.post('/api/fonts/createdir', (req, res) => {
+  try {
+    fs.mkdirSync(FONT_DIR, { recursive: true });
+    res.json({ success: true, relPath: toRel(FONT_DIR) });
+  } catch (e) {
+    sendErr(res, e.message, e.status || 500);
+  }
+});
+
+app.get('/api/fonts/add', (req, res) => {
+  if (ffInstalling) return sendErr(res, 'フォント処理がすでに進行中です', 409);
+  if (!fs.existsSync(FF_SCRIPT)) return sendErr(res, 'add-fonts.sh が見つかりません', 500);
+  if (!ffDirExists()) return sendErr(res, 'Fonts フォルダがありません。先に作成してください', 400);
+  const n = ffCountFonts();
+  if (n === 0) return sendErr(res, 'フォントファイル（ttf/otf/woff/woff2）が Fonts フォルダにありません', 400);
+  if (!fs.existsSync(OO_COMPOSE_FILE)) return sendErr(res, 'OnlyOffice が未セットアップです。先に OnlyOffice をインストールしてください', 400);
+  ffInstalling = true;
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    Connection: 'keep-alive',
+    'X-Accel-Buffering': 'no'
+  });
+  const send = (event, data) => res.write('event: ' + event + '\ndata: ' + JSON.stringify(data) + '\n\n');
+  const log = m => send('log', { message: m });
+
+  log('add-fonts.sh を実行します（フォント ' + n + ' 件を検出）');
+  const child = spawn('bash', [FF_SCRIPT], { cwd: path.dirname(FF_SCRIPT) });
+  let buf = '';
+  const pump = d => {
+    buf += d.toString().replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+    let i;
+    while ((i = buf.indexOf('\n')) >= 0) {
+      const line = buf.slice(0, i); buf = buf.slice(i + 1);
+      const clean = line.replace(/\x1b\[[0-9;]*m/g, '');
+      if (clean.trim()) log(clean);
+    }
+  };
+  child.stdout.on('data', pump);
+  child.stderr.on('data', pump);
+  child.on('close', code => {
+    send('done', { ok: code === 0, code, fontCount: n });
+    ffInstalling = false;
+  });
+  child.on('error', err => {
+    send('done', { ok: false, error: err.message || String(err) });
+    ffInstalling = false;
+  });
+});
+
+/* ── バージョン / アップデート / 再起動 ── */
+app.get('/api/version', async (req, res) => {
+  try {
+    let commit = '';
+    try { commit = (await sh('git', ['rev-parse', '--short', 'HEAD'], { cwd: path.join(__dirname, '..') })).stdout.trim(); } catch (e) {}
+    res.json({ success: true, version: PKG.version, commit });
+  } catch (e) {
+    sendErr(res, e.message, e.status || 500);
+  }
+});
+
+let upUpdating = false;
+app.get('/api/update', (req, res) => {
+  if (upUpdating) return sendErr(res, 'アップデートがすでに進行中です', 409);
+  upUpdating = true;
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    Connection: 'keep-alive',
+    'X-Accel-Buffering': 'no'
+  });
+  const send = (event, data) => res.write('event: ' + event + '\ndata: ' + JSON.stringify(data) + '\n\n');
+  const log = m => send('log', { message: m });
+  const repoDir = path.join(__dirname, '..');
+  (async () => {
+    let oldHead = '';
+    try { oldHead = (await sh('git', ['rev-parse', 'HEAD'], { cwd: repoDir })).stdout.trim(); } catch (e) {}
+    log('GitHub から最新版を取得します (git pull --ff-only)');
+    const child = spawn('git', ['pull', '--ff-only'], { cwd: repoDir });
+    let buf = '';
+    const pump = d => {
+      buf += d.toString().replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+      let i;
+      while ((i = buf.indexOf('\n')) >= 0) {
+        const line = buf.slice(0, i); buf = buf.slice(i + 1);
+        if (line.trim()) log(line);
+      }
+    };
+    child.stdout.on('data', pump);
+    child.stderr.on('data', pump);
+    child.on('close', async code => {
+      if (code !== 0) { send('done', { ok: false, error: 'git pull 失敗 (code ' + code + ')。ローカルの変更を確認してください' }); upUpdating = false; return; }
+      let changed = [];
+      try {
+        changed = (await sh('git', ['diff', '--name-only', oldHead + '..HEAD'], { cwd: repoDir })).stdout.split('\n').filter(Boolean);
+      } catch (e) {}
+      const needRestart = changed.some(f => f.startsWith('server/'));
+      log(changed.length ? '更新ファイル: ' + changed.length + ' 件' : '更新はありません');
+      if (needRestart) log('サーバー側の変更があるため「再起動」が必要です');
+      send('done', { ok: true, changedFiles: changed.length, needRestart });
+      upUpdating = false;
+    });
+    child.on('error', err => {
+      send('done', { ok: false, error: err.message || String(err) });
+      upUpdating = false;
+    });
+  })();
+});
+
+app.post('/api/restart', (req, res) => {
+  res.json({ success: true, restarting: true });
+  setTimeout(() => {
+    sh('systemctl', ['restart', OO_SERVICE_NAME]).catch(e => console.error('restart failed:', e.message));
+  }, 300);
 });
 
 app.listen(PORT, HOST, () => {

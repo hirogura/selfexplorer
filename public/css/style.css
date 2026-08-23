@@ -12,6 +12,10 @@ body{font-family:"Segoe UI Variable","Segoe UI",system-ui,-apple-system,sans-ser
 .header-left{display:flex;align-items:center;gap:8px}
 .logo{font-size:20px}
 .header h1{font-size:14px;font-weight:600;color:var(--text-primary)}
+.version{font-size:10px;color:var(--text-tertiary);background:var(--bg-secondary);border:1px solid var(--border-color);border-radius:8px;padding:1px 6px;white-space:nowrap}
+.hdr-btn{font-size:10px;padding:2px 8px;border-radius:6px;border:1px solid var(--border-color);background:var(--bg-primary);color:var(--text-secondary);cursor:pointer;white-space:nowrap}
+.hdr-btn:hover:not(:disabled){background:var(--bg-secondary);color:var(--text-primary);border-color:var(--border-strong,#c0c0c0)}
+.hdr-btn:disabled{opacity:.5;cursor:default}
 .header-center{flex:1}
 .path-bar{display:flex;align-items:center;gap:2px;background:var(--bg-secondary);padding:3px 6px;border-radius:var(--radius-sm);border:1px solid var(--border-color)}
 .path-btn{background:none;border:none;padding:5px 6px;cursor:pointer;border-radius:var(--radius-sm);color:var(--text-secondary);transition:background .1s;display:inline-flex;align-items:center;justify-content:center}

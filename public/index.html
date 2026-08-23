@@ -10,7 +10,7 @@
 <body>
   <div class="app">
     <header class="header">
-      <div class="header-left"><span class="logo"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#0067c0" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg></span><h1>SelfExplorer</h1></div>
+      <div class="header-left"><span class="logo"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#0067c0" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg></span><h1>SelfExplorer</h1><span class="version" id="app-version"></span><button class="hdr-btn" id="btn-update" title="GitHubから最新版に更新">アップデート</button><button class="hdr-btn" id="btn-restart" title="SelfExplorerサービスを再起動">再起動</button></div>
       <div class="header-center">
         <div class="path-bar">
           <button class="path-btn" id="btn-home" title="ホーム"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg></button>
@@ -62,6 +62,19 @@
             <pre class="oo-log" id="oo-log" hidden></pre>
           </div>
           <p class="oo-hint">OnlyOffice Document Server を導入すると Word / Excel / PowerPoint 形式のファイルをブラウザで編集できます。</p>
+          <div class="oo-card" id="ff-card" style="margin-top:10px">
+            <div class="oo-card-header">
+              <span class="oo-logo"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#7e57c2" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 7 4 4 20 4 20 7"/><line x1="9" y1="20" x2="15" y2="20"/><line x1="12" y1="4" x2="12" y2="20"/></svg></span>
+              <div class="oo-title-wrap">
+                <div class="oo-title">フォント追加</div>
+                <div class="oo-status"><span id="ff-status-text">状態確認中...</span></div>
+              </div>
+              <button class="oo-refresh" id="ff-refresh" title="状態を再確認"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/></svg></button>
+            </div>
+            <div class="oo-notice ff-guide" id="ff-notice" hidden></div>
+            <div class="oo-actions" id="ff-actions"></div>
+            <pre class="oo-log" id="ff-log" hidden></pre>
+          </div>
         </div>
       </aside>
     </div>
