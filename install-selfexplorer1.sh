@@ -83,24 +83,9 @@ command -v npm >/dev/null 2>&1 || die "npm が見つかりません"
 command -v git >/dev/null 2>&1 || die "git が見つかりません"
 ok "前提 OK (Node.js v$(node -v), git 利用可)"
 
-# ── OnlyOffice インストール確認 ────────────────────────────────────────────────
-echo ""
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-REUSE_EXISTING_OO="n"
-if [ -f /opt/onlyoffice/docker-compose.yml ]; then
-  warn "既存の OnlyOffice 環境 (/opt/onlyoffice) を検出しました"
-  read -rp "  既存の OnlyOffice 環境を再利用しますか？ [Y/n]: " reuse_oo
-  reuse_oo="${reuse_oo:-Y}"
-  if [[ "${reuse_oo}" =~ ^[Yy] ]]; then
-    REUSE_EXISTING_OO="y"
-    install_oo="Y"
-  fi
-fi
-if [ "${REUSE_EXISTING_OO}" != "y" ]; then
-  read -rp "  OnlyOffice Document Server をインストールしますか？ [Y/n]: " install_oo
-  install_oo="${install_oo:-Y}"
-fi
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+# ── OnlyOffice について ───────────────────────────────────────────────────────
+# SelfExplorer のインストール時には OnlyOffice をインストールしない
+install_oo="n"
 
 # ── ディレクトリ作成 ──────────────────────────────────────────────────────────
 info "ディレクトリ作成..."
@@ -118,26 +103,13 @@ rm -rf "${TMP_CLONE}"
 ok "クローン完了"
 
 # ── OnlyOffice シークレット生成 ───────────────────────────────────────────────
-if [ "${REUSE_EXISTING_OO}" = "y" ]; then
-  OO_SECRET=$(grep 'JWT_SECRET:' /opt/onlyoffice/docker-compose.yml | head -1 | sed 's/.*JWT_SECRET: *"\(.*\)"/\1/' 2>/dev/null || true)
-  if [ -z "${OO_SECRET}" ]; then
-    warn "既存のシークレットキーを取得できなかったため、新規に生成します"
-    OO_SECRET=$(python3 -c "import secrets; print(secrets.token_hex(32))")
-    REUSE_EXISTING_OO="n"
-  else
-    ok "既存の OnlyOffice シークレットキーを再利用します"
-  fi
-else
-  OO_SECRET=$(python3 -c "import secrets; print(secrets.token_hex(32))")
-fi
+OO_SECRET=$(python3 -c "import secrets; print(secrets.token_hex(32))")
 
 # ── 設定を反映 (server.js.template から生成 / app.js を書き換え) ──────────────
 # 注意: server.js はシークレットを含むためリポジトリに含めない
 #       (.gitignore で追跡除外)。テンプレートから生成する。
 info "設定を反映..."
-if [ ! -f "${INSTALL_DIR}/server/server.js" ] || [ "${REUSE_EXISTING_OO}" != "y" ]; then
-  cp -f "${INSTALL_DIR}/server/server.js.template" "${INSTALL_DIR}/server/server.js"
-fi
+cp -f "${INSTALL_DIR}/server/server.js.template" "${INSTALL_DIR}/server/server.js"
 sed -i "s,__PORT__,${PORT},g" "${INSTALL_DIR}/server/server.js"
 sed -i "s,__ROOT_DIR__,${BROWSE_ROOT},g" "${INSTALL_DIR}/server/server.js"
 sed -i "s,__OO_PORT__,${OO_PORT},g" "${INSTALL_DIR}/server/server.js"
@@ -146,56 +118,7 @@ sed -i "s,const ROOT_PREFIX='[^']*',const ROOT_PREFIX='${BROWSE_ROOT}'," "${INST
 ok "設定反映完了"
 
 # ── OnlyOffice セットアップ ──────────────────────────────────────────────────
-if [[ "${install_oo}" =~ ^[Yy] ]]; then
-  if [ "${REUSE_EXISTING_OO}" = "y" ]; then
-    info "既存の OnlyOffice 環境を再利用します..."
-    cd /opt/onlyoffice
-    docker compose up -d
-    ok "OnlyOffice コンテナの起動を確認しました"
-  else
-    info "OnlyOffice のディレクトリを作成..."
-    mkdir -p /opt/onlyoffice/{logs,data,lib}
-    cat > /opt/onlyoffice/docker-compose.yml << OOCHEOF
-# OnlyOffice Document Server for SelfExplorer
-# Generated: $(date '+%Y-%m-%d %H:%M:%S')
-
-services:
-  onlyoffice:
-    image: onlyoffice/documentserver:latest
-    container_name: onlyoffice
-    restart: unless-stopped
-    ports:
-      - "127.0.0.1:${OO_PORT}:80"
-    environment:
-      JWT_ENABLED: "true"
-      JWT_SECRET: "${OO_SECRET}"
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-    volumes:
-      - /opt/onlyoffice/logs:/var/log/onlyoffice
-      - /opt/onlyoffice/data:/var/www/onlyoffice/Data
-      - /opt/onlyoffice/lib:/var/lib/onlyoffice
-OOCHEOF
-    ok "OnlyOffice docker-compose.yml 生成完了"
-    info "OnlyOffice コンテナを起動..."
-    cd /opt/onlyoffice
-    docker compose pull
-    docker compose up -d
-    ok "OnlyOffice コンテナ起動完了（初回起動は2〜3分かかります）"
-  fi
-  if command -v tailscale >/dev/null 2>&1; then
-    EXISTING_SERVE=$(tailscale serve status 2>/dev/null || true)
-    if echo "${EXISTING_SERVE}" | grep -q ":${OO_PORT}"; then
-      warn "ポート ${OO_PORT} はすでに Tailscale Serve に登録されています。スキップします。"
-    else
-      info "Tailscale Serve にポート ${OO_PORT} を追加..."
-      tailscale serve --bg --https="${OO_PORT}" "http://127.0.0.1:${OO_PORT}"
-      ok "OnlyOffice の Tailscale Serve 設定追加完了"
-    fi
-  fi
-else
-  info "OnlyOffice のインストールをスキップします"
-fi
+info "OnlyOffice はインストールしません"
 
 # ── npm install ───────────────────────────────────────────────────────────────
 info "npm install 実行中..."
@@ -276,13 +199,6 @@ ok "SelfExplorer v11 セットアップ完了！"
 echo ""
 if [ -n "${TS_HOSTNAME}" ]; then
   echo "  SelfExplorer : https://${TS_HOSTNAME}:${PORT}"
-  if [[ "${install_oo}" =~ ^[Yy] ]]; then
-    if [ "${REUSE_EXISTING_OO}" = "y" ]; then
-      echo "  OnlyOffice   : https://${TS_HOSTNAME}:${OO_PORT}  (既存環境を再利用)"
-    else
-      echo "  OnlyOffice   : https://${TS_HOSTNAME}:${OO_PORT}"
-    fi
-  fi
 else
   warn "Tailscale Serve の設定情報を取得できませんでした（tailscale未起動の可能性があります）"
   echo "  SelfExplorer : http://$(hostname -I 2>/dev/null | awk '{print $1}' || echo 'localhost'):${PORT}  (ローカルアクセスのみ)"

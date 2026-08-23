@@ -145,3 +145,42 @@ body{font-family:"Segoe UI Variable","Segoe UI",system-ui,-apple-system,sans-ser
 .fav-remove{display:none;margin-left:auto;font-size:10px;color:var(--text-tertiary);cursor:pointer;padding:2px 4px;border-radius:3px;line-height:1}
 .tree-item-content:hover .fav-remove{display:block}
 .fav-remove:hover{background:var(--bg-hover);color:var(--danger-color)}
+/* 右サイドバー（アプリ連携） */
+.right-sidebar{width:250px;background:var(--bg-primary);border-left:1px solid var(--border-color);display:flex;flex-direction:column;overflow:hidden}
+.right-sidebar-body{flex:1;overflow-y:auto;padding:10px}
+.oo-card{border:1px solid var(--border-color);border-radius:var(--radius);padding:12px;display:flex;flex-direction:column;gap:10px;background:var(--bg-primary)}
+.oo-card-header{display:flex;align-items:center;gap:8px}
+.oo-logo{width:28px;height:28px;display:flex;align-items:center;justify-content:center;flex-shrink:0}
+.oo-title-wrap{flex:1;min-width:0}
+.oo-title{font-size:14px;font-weight:600;color:var(--text-primary)}
+.oo-status{display:flex;align-items:center;gap:5px;font-size:12px;color:var(--text-secondary);margin-top:2px}
+.oo-dot{width:8px;height:8px;border-radius:50%;background:var(--text-tertiary);flex-shrink:0}
+.oo-dot.checking{background:var(--text-tertiary)}
+.oo-dot.ready{background:#2da44e}
+.oo-dot.stopped{background:#d29922}
+.oo-dot.notinstalled{background:var(--text-tertiary)}
+.oo-dot.error{background:var(--danger-color)}
+.oo-dot.installing{background:#d29922;animation:oo-pulse 1s ease-in-out infinite}
+@keyframes oo-pulse{0%,100%{opacity:1}50%{opacity:.3}}
+.oo-refresh{background:none;border:none;padding:4px;cursor:pointer;border-radius:var(--radius-sm);color:var(--text-tertiary);display:inline-flex;align-items:center;transition:background .1s,color .1s}
+.oo-refresh:hover{background:var(--bg-hover);color:var(--text-primary)}
+.oo-env{font-size:11px;color:var(--text-secondary)}
+.oo-env-ok{color:#2da44e;font-weight:600}
+.oo-env-ng{color:var(--danger-color);font-weight:600}
+.oo-notice{display:none;border:1px solid #f0c36d;background:#fff8e6;border-radius:var(--radius-sm);padding:8px 10px;font-size:12px;color:#6b5200;line-height:1.5}
+.oo-notice.show{display:block}
+.oo-notice-title{font-weight:600;margin-bottom:4px;color:#7a5b00}
+.oo-notice-line{margin:2px 0;word-break:break-all}
+.oo-cmd{background:#1f2328;color:#e6edf3;border-radius:4px;padding:6px 8px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:11px;margin:6px 0;white-space:pre-wrap;word-break:break-all;cursor:pointer;user-select:all}
+.oo-cmd:hover{outline:2px solid #f0c36d}
+.oo-actions{display:flex;flex-direction:column;gap:6px}
+.oo-btn{width:100%;display:inline-flex;align-items:center;justify-content:center;gap:6px;padding:7px 12px;border:1px solid var(--border-color);border-radius:var(--radius-sm);background:var(--bg-primary);cursor:pointer;font-size:13px;font-family:inherit;color:var(--text-primary);transition:background .1s}
+.oo-btn:hover{background:var(--bg-hover)}
+.oo-btn.primary{background:var(--accent-color);color:white;border-color:var(--accent-color)}
+.oo-btn.primary:hover{background:#005a9e}
+.oo-btn:disabled{opacity:.55;cursor:not-allowed}
+.oo-spinner{width:12px;height:12px;border:2px solid rgba(255,255,255,.35);border-top-color:white;border-radius:50%;animation:oo-spin .7s linear infinite;flex-shrink:0}
+@keyframes oo-spin{to{transform:rotate(360deg)}}
+.oo-log{display:none;max-height:200px;overflow-y:auto;background:#161b22;color:#c9d1d9;border-radius:var(--radius-sm);font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:11px;line-height:1.5;padding:8px 10px;white-space:pre-wrap;word-break:break-all;margin:0}
+.oo-log.show{display:block}
+.oo-hint{font-size:11px;color:var(--text-tertiary);line-height:1.6;padding:2px 2px 0}

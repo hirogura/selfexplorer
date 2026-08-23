@@ -44,6 +44,26 @@
           <div class="file-list" id="file-list"></div>
         </div>
       </main>
+      <aside class="right-sidebar" id="right-sidebar">
+        <div class="sidebar-header"><h3>アプリ連携</h3></div>
+        <div class="right-sidebar-body">
+          <div class="oo-card" id="oo-card">
+            <div class="oo-card-header">
+              <span class="oo-logo"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#ff6f3d" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><path d="M9 15l2 2 4-4"/></svg></span>
+              <div class="oo-title-wrap">
+                <div class="oo-title">OnlyOffice</div>
+                <div class="oo-status"><span class="oo-dot" id="oo-dot"></span><span id="oo-status-text">状態確認中...</span></div>
+              </div>
+              <button class="oo-refresh" id="oo-refresh" title="状態を再確認"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/></svg></button>
+            </div>
+            <div class="oo-env" id="oo-env"></div>
+            <div class="oo-notice" id="oo-notice" hidden></div>
+            <div class="oo-actions" id="oo-actions"></div>
+            <pre class="oo-log" id="oo-log" hidden></pre>
+          </div>
+          <p class="oo-hint">OnlyOffice Document Server を導入すると Word / Excel / PowerPoint 形式のファイルをブラウザで編集できます。</p>
+        </div>
+      </aside>
     </div>
     <footer class="status-bar"><span id="status-text">準備完了</span></footer>
   </div>

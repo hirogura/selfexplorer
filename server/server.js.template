@@ -8,6 +8,7 @@ const archiver = require('archiver');
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
+const { execFile } = require('child_process');
 
 const PORT = parseInt(process.env.PORT || '__PORT__', 10);
 const OO_PORT = parseInt(process.env.ONLYOFFICE_PORT || '__OO_PORT__', 10);
@@ -16,6 +17,146 @@ const ROOT_DIR = path.resolve(process.env.ROOT_DIR || '__ROOT_DIR__');
 const ONLYOFFICE_URL = (process.env.ONLYOFFICE_URL || '').replace(/\/+$/, '');
 const ONLYOFFICE_SECRET = process.env.ONLYOFFICE_SECRET || '__OO_SECRET__';
 const PUBLIC_URL = (process.env.PUBLIC_URL || '').replace(/\/+$/, '');
+const OO_DIR = '/opt/onlyoffice';
+const OO_COMPOSE_FILE = path.join(OO_DIR, 'docker-compose.yml');
+const OO_SERVICE_NAME = 'selfexplorer';
+
+function sh(cmd, args, opts = {}) {
+  return new Promise((resolve, reject) => {
+    execFile(cmd, args, {
+      timeout: opts.timeout || 30000,
+      maxBuffer: 20 * 1024 * 1024,
+      cwd: opts.cwd
+    }, (err, stdout, stderr) => {
+      if (err) { err.stdout = stdout; err.stderr = stderr; return reject(err); }
+      resolve({ stdout, stderr });
+    });
+  });
+}
+
+async function ooHealthy() {
+  try {
+    const r = await fetch('http://127.0.0.1:' + OO_PORT + '/healthcheck', { signal: AbortSignal.timeout(2500) });
+    return (await r.text()).trim() === 'true';
+  } catch (e) { return false; }
+}
+
+async function ooContainerRunning() {
+  try {
+    const r = await sh('docker', ['ps', '--filter', 'name=onlyoffice', '--filter', 'status=running', '-q'], { timeout: 15000 });
+    return r.stdout.trim().length > 0;
+  } catch (e) { return false; }
+}
+
+async function ooComposeCommand() {
+  try { await sh('docker', ['compose', 'version'], { timeout: 20000 }); return { cmd: 'docker', baseArgs: ['compose'] }; }
+  catch (e) {}
+  try { await sh('docker-compose', ['version'], { timeout: 20000 }); return { cmd: 'docker-compose', baseArgs: [] }; } catch (e) {}
+  throw new Error('docker compose プラグインが見つかりません');
+}
+
+async function ooDockerDaemonReady(deadlineMs) {
+  const deadline = Date.now() + deadlineMs;
+  while (Date.now() < deadline) {
+    try { await sh('docker', ['info'], { timeout: 10000 }); return true; } catch (e) {}
+    await new Promise(r => setTimeout(r, 3000));
+  }
+  return false;
+}
+
+function ooReadComposeSecret() {
+  try {
+    const m = fs.readFileSync(OO_COMPOSE_FILE, 'utf8').match(/JWT_SECRET:\s*"([^"]+)"/);
+    return m ? m[1] : '';
+  } catch (e) { return ''; }
+}
+
+function ooServerSecretFile() {
+  return path.join(__dirname, 'server.js');
+}
+
+function ooCurrentServerSecret() {
+  try {
+    const m = fs.readFileSync(ooServerSecretFile(), 'utf8')
+      .match(/const ONLYOFFICE_SECRET = process\.env\.ONLYOFFICE_SECRET \|\| '([^']*)'/);
+    return m ? m[1] : ONLYOFFICE_SECRET;
+  } catch (e) { return ONLYOFFICE_SECRET; }
+}
+
+function ooSetServerSecret(secret) {
+  const file = ooServerSecretFile();
+  let src = fs.readFileSync(file, 'utf8');
+  src = src.replace(/const ONLYOFFICE_SECRET = process\.env\.ONLYOFFICE_SECRET \|\| '[^']*'/,
+    "const ONLYOFFICE_SECRET = process.env.ONLYOFFICE_SECRET || '" + secret + "'");
+  fs.writeFileSync(file, src);
+}
+
+function ooEditorUrl(req) {
+  if (ONLYOFFICE_URL) return ONLYOFFICE_URL;
+  const proto = publicProto(req);
+  const host = publicHost(req);
+  return proto + '://' + swapPort(host, OO_PORT);
+}
+
+/* ── 実行環境チェック（LXD コンテナ / Nesting 判定） ── */
+async function ooDevLxdInfo() {
+  try {
+    if (!fs.existsSync('/dev/lxd/sock')) return null;
+    const out = (await sh('curl', ['-sf', '--max-time', '3', '--unix-socket', '/dev/lxd/sock', 'http://local/1.0'], { timeout: 8000 })).stdout;
+    return JSON.parse(out);
+  } catch (e) { return null; }
+}
+
+function ooReadAttrCurrent() {
+  for (const f of ['/proc/self/attr/current', '/proc/self/attr/apparmor/current']) {
+    try { const v = fs.readFileSync(f, 'utf8').trim(); if (v) return v; } catch (e) {}
+  }
+  return '';
+}
+
+function ooHasCapSysAdmin() {
+  try {
+    const m = fs.readFileSync('/proc/self/status', 'utf8').match(/^CapEff:\s*([0-9a-f]+)/m);
+    if (!m) return null;
+    return ((BigInt('0x' + m[1]) >> BigInt(21)) & BigInt(1)) === BigInt(1);
+  } catch (e) { return null; }
+}
+
+async function ooEnvCheck() {
+  let virt = 'none';
+  try { virt = (await sh('systemd-detect-virt', ['-c'], { timeout: 5000 })).stdout.trim(); } catch (e) {}
+  let isLxc = false;
+  if (virt === 'lxc' || virt === 'lxd') isLxc = true;
+  else {
+    try { if (/container=(lxc|lxd)/.test(fs.readFileSync('/proc/1/environ', 'utf8'))) { isLxc = true; virt = 'lxc'; } } catch (e) {}
+  }
+  if (!isLxc && fs.existsSync('/dev/lxd/sock')) { isLxc = true; virt = 'lxc'; }
+  let containerName = '';
+  let hostName = '';
+  if (isLxc) {
+    const d = await ooDevLxdInfo();
+    if (d && d.location) hostName = d.location;
+    try { containerName = fs.readFileSync('/etc/hostname', 'utf8').trim(); } catch (e) {}
+  }
+  const attr = ooReadAttrCurrent();
+  const nestingProfile = attr.includes(':lxd-nesting:');
+  const capSysAdmin = ooHasCapSysAdmin();
+  const nestingOk = isLxc ? (nestingProfile || capSysAdmin === true) : true;
+  return { virt, isLxc, containerName, hostName, nestingProfile, capSysAdmin, nestingOk };
+}
+
+/* Nesting の自動変更はホスト側 lxc CLI が利用できる場合のみ試みる */
+async function ooTryEnableNesting(name) {
+  let names = null;
+  try {
+    names = (await sh('lxc', ['list', '--format', 'csv', '-c', 'n'], { timeout: 15000 })).stdout.split('\n').map(s => s.trim()).filter(Boolean);
+  } catch (e) { return { result: 'no-cli' }; }
+  if (!name || !names.includes(name)) return { result: 'not-found' };
+  try {
+    await sh('lxc', ['config', 'set', name, 'security.nesting', 'true'], { timeout: 20000 });
+    return { result: 'set' };
+  } catch (e) { return { result: 'fail', error: e.message || String(e) }; }
+}
 
 const app = express();
 app.use(express.json({ limit: '20mb' }));
@@ -409,6 +550,190 @@ app.post('/api/onlyoffice/callback', async (req, res) => {
   } catch (e) {
     res.json({ error: 1 });
   }
+});
+
+let ooInstalling = false;
+
+app.get('/api/onlyoffice/status', async (req, res) => {
+  try {
+    const installed = fs.existsSync(OO_COMPOSE_FILE);
+    const running = installed ? await ooContainerRunning() : false;
+    const healthy = running ? await ooHealthy() : false;
+    let docker = false;
+    try { await sh('docker', ['version', '--format', 'ok'], { timeout: 10000 }); docker = true; } catch (e) {}
+    const env = await ooEnvCheck();
+    res.json({ success: true, installed, running, healthy, docker, port: OO_PORT, editorUrl: ooEditorUrl(req), installing: ooInstalling, env });
+  } catch (e) {
+    sendErr(res, e.message, e.status || 500);
+  }
+});
+
+app.get('/api/onlyoffice/install', (req, res) => {
+  if (ooInstalling) return sendErr(res, 'セットアップがすでに進行中です', 409);
+  ooInstalling = true;
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    Connection: 'keep-alive',
+    'X-Accel-Buffering': 'no'
+  });
+  const send = (event, data) => res.write('event: ' + event + '\ndata: ' + JSON.stringify(data) + '\n\n');
+  const log = m => send('log', { message: m });
+
+  (async () => {
+    let needRestart = false;
+    let reused = false;
+    try {
+      log('OnlyOffice Document Server のセットアップを開始します');
+
+      // ── 実行環境チェック（LXD コンテナ / Nesting） ──
+      log('実行環境を確認中...');
+      const envCheck = await ooEnvCheck();
+      if (envCheck.isLxc && !envCheck.nestingOk) {
+        const cname = envCheck.containerName || '<コンテナ名>';
+        log('LXD コンテナ「' + cname + '」内で Nesting が無効のため、このままでは Docker を起動できません');
+        const fix = await ooTryEnableNesting(envCheck.containerName);
+        if (fix.result === 'set') {
+          log('security.nesting=true を設定しました。反映にはコンテナ再起動が必要です');
+          send('warning', {
+            title: 'security.nesting を有効にしました',
+            lines: ['設定の反映にはコンテナの再起動が必要です。ホスト側で次のコマンドを実行してください:'],
+            command: 'lxc restart ' + cname,
+            after: '再起動後、ページを再読み込みしてもう一度インストールを実行してください'
+          });
+        } else {
+          send('warning', {
+            title: 'LXD コンテナの Nesting を有効にしてください',
+            lines: [
+              'この環境は LXD コンテナ内で、Nesting が無効のため Docker を起動できません。',
+              'ホスト' + (envCheck.hostName ? '（' + envCheck.hostName + '）' : '') + '側で次のコマンドを実行してください:'
+            ],
+            command: 'lxc config set ' + cname + ' security.nesting true\nlxc restart ' + cname,
+            after: '再起動後、ページを再読み込みしてもう一度インストールを実行してください'
+          });
+        }
+        send('done', { ok: false, error: fix.result === 'set' ? 'コンテナ再起動後に再度実行してください' : 'Nesting を有効にしてから再度実行してください', blocked: 'nesting' });
+        return;
+      }
+      log(envCheck.isLxc
+        ? 'LXD コンテナ内を検出 (' + (envCheck.containerName || '名称不明') + ') - Docker の動作に問題なし。続行します'
+        : '実行環境: ' + (envCheck.virt === 'none' ? 'ネイティブ (VM/物理)' : envCheck.virt));
+
+      // ── Docker の確認・インストール ──
+      let dockerOk = false;
+      try { await sh('docker', ['version', '--format', 'ok'], { timeout: 10000 }); dockerOk = true; } catch (e) {}
+      if (!dockerOk) {
+        log('Docker が見つかりません。インストール中...（数分かかります）');
+        await sh('bash', ['-c', 'curl -fsSL https://get.docker.com | sh'], { timeout: 900000 });
+        await sh('systemctl', ['enable', '--now', 'docker'], { timeout: 60000 }).catch(() => {});
+        if (!(await ooDockerDaemonReady(60000))) throw new Error('Docker デーモンの起動に失敗しました');
+        log('Docker のインストールが完了しました');
+      }
+
+      // ── シークレットの決定（既存環境は再利用） ──
+      let secret = '';
+      if (fs.existsSync(OO_COMPOSE_FILE)) {
+        reused = true;
+        log('既存の OnlyOffice 環境 (/opt/onlyoffice) を検出しました。再利用します');
+        secret = ooReadComposeSecret();
+        if (!secret) {
+          log('既存のシークレットキーを取得できなかったため、新規に生成します');
+          secret = crypto.randomBytes(32).toString('hex');
+          reused = false;
+        }
+      } else {
+        secret = crypto.randomBytes(32).toString('hex');
+      }
+
+      // ── docker-compose.yml の生成 ──
+      if (!reused) {
+        log('OnlyOffice のディレクトリを作成...');
+        fs.mkdirSync(path.join(OO_DIR, 'logs'), { recursive: true });
+        fs.mkdirSync(path.join(OO_DIR, 'data'), { recursive: true });
+        fs.mkdirSync(path.join(OO_DIR, 'lib'), { recursive: true });
+        const composeYml = [
+          '# OnlyOffice Document Server for SelfExplorer',
+          '# Generated: ' + new Date().toISOString(),
+          '',
+          'services:',
+          '  onlyoffice:',
+          '    image: onlyoffice/documentserver:latest',
+          '    container_name: onlyoffice',
+          '    restart: unless-stopped',
+          '    ports:',
+          '      - "127.0.0.1:' + OO_PORT + ':80"',
+          '    environment:',
+          '      JWT_ENABLED: "true"',
+          '      JWT_SECRET: "' + secret + '"',
+          '    extra_hosts:',
+          '      - "host.docker.internal:host-gateway"',
+          '    volumes:',
+          '      - /opt/onlyoffice/logs:/var/log/onlyoffice',
+          '      - /opt/onlyoffice/data:/var/www/onlyoffice/Data',
+          '      - /opt/onlyoffice/lib:/var/lib/onlyoffice',
+          ''
+        ].join('\n');
+        fs.writeFileSync(OO_COMPOSE_FILE, composeYml);
+        log('docker-compose.yml を生成しました');
+      }
+
+      // ── server.js のシークレットを同期 ──
+      if (ooCurrentServerSecret() !== secret) {
+        log('SelfExplorer 側のシークレットキーを更新します');
+        ooSetServerSecret(secret);
+        needRestart = true;
+      }
+
+      // ── コンテナ起動 ──
+      const compose = await ooComposeCommand();
+      if (!reused) {
+        log('OnlyOffice イメージをダウンロード中...（初回は数分かかります）');
+        await sh(compose.cmd, compose.baseArgs.concat(['pull']), { timeout: 1800000, cwd: OO_DIR });
+      } else {
+        await sh(compose.cmd, compose.baseArgs.concat(['pull']), { timeout: 1800000, cwd: OO_DIR }).catch(() => {});
+      }
+      log('OnlyOffice コンテナを起動中...');
+      await sh(compose.cmd, compose.baseArgs.concat(['up', '-d']), { timeout: 600000, cwd: OO_DIR });
+      send('progress', { message: 'コンテナを起動しました' });
+
+      // ── Tailscale Serve 設定 ──
+      try {
+        await sh('tailscale', ['version'], { timeout: 10000 });
+        const serveStatus = (await sh('tailscale', ['serve', 'status'], { timeout: 15000 })).stdout;
+        if (serveStatus.includes(':' + OO_PORT)) {
+          log('ポート ' + OO_PORT + ' はすでに Tailscale Serve に登録されています');
+        } else {
+          log('Tailscale Serve にポート ' + OO_PORT + ' を追加...');
+          await sh('tailscale', ['serve', '--bg', '--https=' + OO_PORT, 'http://127.0.0.1:' + OO_PORT], { timeout: 30000 });
+          log('Tailscale Serve の設定を追加しました');
+        }
+      } catch (e) {}
+
+      // ── 起動待ち（healthcheck） ──
+      log('Document Server の起動を待機中...（初回は2〜3分かかります）');
+      const deadline = Date.now() + 420000;
+      let waited = 0;
+      while (Date.now() < deadline) {
+        if (await ooHealthy()) break;
+        await new Promise(r => setTimeout(r, 5000));
+        waited += 5;
+        if (waited % 20 === 0) send('progress', { message: '起動を待機中... (' + waited + '秒経過)' });
+      }
+
+      const healthy = await ooHealthy();
+      if (healthy) log('OnlyOffice Document Server が起動しました！');
+      else log('警告: タイムアウトまでに起動が確認できませんでした。後ほど「再チェック」をお試しください');
+
+      send('done', { ok: true, healthy, reused, needRestart, editorUrl: ooEditorUrl(req) });
+      if (needRestart) {
+        setTimeout(() => { sh('systemctl', ['restart', OO_SERVICE_NAME]).catch(() => {}); }, 1500);
+      }
+    } catch (e) {
+      send('done', { ok: false, error: e.message || String(e) });
+    } finally {
+      ooInstalling = false;
+    }
+  })();
 });
 
 app.listen(PORT, HOST, () => {
