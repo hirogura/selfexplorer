@@ -75,6 +75,12 @@ function ooReadComposeSecret() {
   } catch (e) { return ''; }
 }
 
+/* 実行時に有効なシークレットを解決: 環境変数 > コンテナ側 (docker-compose.yml) > 既定値 */
+function ooActiveSecret() {
+  if (process.env.ONLYOFFICE_SECRET) return ONLYOFFICE_SECRET;
+  return ooReadComposeSecret() || ONLYOFFICE_SECRET;
+}
+
 function ooServerSecretFile() {
   return path.join(__dirname, 'server.js');
 }
@@ -234,7 +240,7 @@ function b64url(buf) {
 function signJwt(payload) {
   const header = b64url(JSON.stringify({ alg: 'HS256', typ: 'JWT' }));
   const body = b64url(JSON.stringify(payload));
-  const sig = crypto.createHmac('sha256', ONLYOFFICE_SECRET).update(header + '.' + body).digest();
+  const sig = crypto.createHmac('sha256', ooActiveSecret()).update(header + '.' + body).digest();
   return header + '.' + body + '.' + b64url(sig);
 }
 
@@ -242,7 +248,7 @@ function verifyJwt(token) {
   const parts = String(token || '').split('.');
   if (parts.length !== 3) return null;
   const [h, b, s] = parts;
-  const expected = crypto.createHmac('sha256', ONLYOFFICE_SECRET).update(h + '.' + b).digest();
+  const expected = crypto.createHmac('sha256', ooActiveSecret()).update(h + '.' + b).digest();
   let sig;
   try { sig = Buffer.from(s, 'base64url'); } catch (e) { return null; }
   if (expected.length !== sig.length || !crypto.timingSafeEqual(expected, sig)) return null;
@@ -559,7 +565,7 @@ app.get('/api/onlyoffice/config', (req, res) => {
       },
       documentType: getDocType(ext)
     };
-    if (ONLYOFFICE_SECRET) config.token = signJwt(config);
+    if (ooActiveSecret()) config.token = signJwt(config);
     res.json({ success: true, editorUrl, config });
   } catch (e) {
     sendErr(res, e.message, e.status || 400);
@@ -569,7 +575,7 @@ app.get('/api/onlyoffice/config', (req, res) => {
 app.post('/api/onlyoffice/callback', async (req, res) => {
   try {
     const body = req.body || {};
-    if (ONLYOFFICE_SECRET && !verifyJwt(body.token)) {
+    if (ooActiveSecret() && !verifyJwt(body.token)) {
       return res.json({ error: 1 });
     }
     if (body.status === 2 && body.url) {
