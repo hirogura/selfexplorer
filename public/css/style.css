@@ -189,3 +189,12 @@ body{font-family:"Segoe UI Variable","Segoe UI",system-ui,-apple-system,sans-ser
 .oo-log{display:none;max-height:200px;overflow-y:auto;background:#161b22;color:#c9d1d9;border-radius:var(--radius-sm);font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:11px;line-height:1.5;padding:8px 10px;white-space:pre-wrap;word-break:break-all;margin:0}
 .oo-log.show{display:block}
 .oo-hint{font-size:11px;color:var(--text-tertiary);line-height:1.6;padding:2px 2px 0}
+/* Webサーバ パネル */
+.web-body{display:flex;flex-direction:column;gap:8px}
+.web-label{font-size:11px;color:var(--text-secondary);font-weight:600}
+.web-select{width:100%;padding:6px 8px;border:1px solid var(--border-color);border-radius:var(--radius-sm);background:var(--bg-primary);color:var(--text-primary);font-size:13px;font-family:inherit}
+.web-select:focus{outline:none;border-color:var(--accent-color)}
+.web-actions{display:flex;gap:6px}
+.web-actions .oo-btn{flex:1}
+.web-start-row{display:flex;align-items:center;gap:8px}
+.web-url{font-size:11px;color:var(--text-secondary);word-break:break-all;background:var(--bg-hover);border-radius:var(--radius-sm);padding:6px 8px;line-height:1.5}

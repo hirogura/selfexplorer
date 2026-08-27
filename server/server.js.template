@@ -8,10 +8,12 @@ const archiver = require('archiver');
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
+const http = require('http');
 const { execFile } = require('child_process');
 
 const PORT = parseInt(process.env.PORT || '__PORT__', 10);
 const OO_PORT = parseInt(process.env.ONLYOFFICE_PORT || '__OO_PORT__', 10);
+const WEB_PORT = parseInt(process.env.WEB_SERVER_PORT || '3358', 10);
 const HOST = '127.0.0.1';
 const ROOT_DIR = path.resolve(process.env.ROOT_DIR || '__ROOT_DIR__');
 const ONLYOFFICE_URL = (process.env.ONLYOFFICE_URL || '').replace(/\/+$/, '');
@@ -910,6 +912,200 @@ app.post('/api/restart', (req, res) => {
   setTimeout(() => {
     sh('systemctl', ['restart', OO_SERVICE_NAME]).catch(e => console.error('restart failed:', e.message));
   }, 300);
+});
+
+/* ── Web サーバ（公開フォルダ） ── */
+const WEB_SERVE_PORT = WEB_PORT;
+
+let webServer = null;
+let webFolder = '';
+let webServerStarting = false;
+let webStaticMid = express.static(path.join(ROOT_DIR, 'nonexistent'));
+
+const webExpress = express();
+
+function refreshWebStatic() {
+  webStaticMid = express.static(path.join(ROOT_DIR, webFolder), { fallthrough: true });
+}
+
+webExpress.use((req, res, next) => {
+  if (!webFolder) return res.status(503).send('Web server is not running');
+  const folder = webFolder;
+  let p = req.path;
+  if (p === '/') p = '/' + folder + '/';
+  if (p === '/' + folder) p = '/' + folder + '/';
+  if (!p.startsWith('/' + folder + '/')) return res.status(404).send('Not found');
+  const rel = p.slice(folder.length + 2);
+  const abs = path.join(ROOT_DIR, folder, rel);
+  try {
+    if (fs.statSync(abs).isDirectory()) {
+      if (fs.existsSync(path.join(abs, 'index.html'))) {
+        req.url = '/' + (rel ? rel + '/' : '') + 'index.html';
+        return webStaticMid(req, res, next);
+      }
+      return sendWebListing(res, folder, rel);
+    }
+  } catch (e) {}
+  req.url = '/' + rel;
+  return webStaticMid(req, res, next);
+});
+
+function sendWebListing(res, folder, rel) {
+  const abs = path.join(ROOT_DIR, folder, rel);
+  let entries;
+  try {
+    entries = fs.readdirSync(abs, { withFileTypes: true });
+  } catch (e) {
+    return res.status(404).send('Not found');
+  }
+  entries.sort((a, b) => {
+    if (a.isDirectory() !== b.isDirectory()) return a.isDirectory() ? -1 : 1;
+    return a.name.localeCompare(b.name, 'ja');
+  });
+  const relPath = rel ? ('/' + folder + '/' + rel) : ('/' + folder);
+  const baseHref = encodeURI(relPath.replace(/\/$/, '')) + '/';
+  const rows = [];
+  rows.push('<tr><td><a href="' + baseHref + '">..</a></td><td></td><td></td></tr>');
+  for (const e of entries) {
+    let size = '';
+    if (!e.isDirectory()) {
+      try { size = formatWebSize(fs.statSync(path.join(abs, e.name)).size); } catch (err) {}
+    }
+    rows.push('<tr><td><a href="' + encodeURI(e.name) + (e.isDirectory() ? '/' : '') + '">' +
+      (e.isDirectory() ? '📁 ' : '📄 ') + escapeHtml(e.name) + '</a></td><td class="sz">' + (e.isDirectory() ? '-' : size) + '</td></tr>');
+  }
+  const html = '<!DOCTYPE html><html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Index of ' + escapeHtml(relPath) + '</title><style>body{font-family:system-ui,sans-serif;margin:40px auto;max-width:800px;padding:0 16px;color:#222}a{color:#0b5cad;text-decoration:none}a:hover{text-decoration:underline}table{width:100%;border-collapse:collapse}td{padding:6px 10px;border-bottom:1px solid #eee}td.sz{text-align:right;color:#666;white-space:nowrap}h1{font-size:18px;font-weight:600}</style></head><body><h1>Index of ' + escapeHtml(relPath) + '</h1><table>' + rows.join('') + '</table></body></html>';
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  return res.send(html);
+}
+
+function formatWebSize(b) {
+  if (b < 1024) return b + ' B';
+  const k = 1024, s = ['KB', 'MB', 'GB', 'TB'], i = Math.floor(Math.log(b) / Math.log(k));
+  return (b / Math.pow(k, i)).toFixed(1) + ' ' + s[i];
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+webExpress.get('/_status', (req, res) => {
+  res.json({ running: !!webFolder && !!webServer, folder: webFolder, port: WEB_SERVE_PORT });
+});
+
+async function tailnetHostname() {
+  try {
+    const out = (await sh('tailscale', ['whoami', '--json'], { timeout: 10000 })).stdout;
+    const j = JSON.parse(out);
+    if (j && j.Node && j.Node.Name) return j.Node.Name.replace(/\.$/, '');
+  } catch (e) {}
+  try {
+    const j = JSON.parse((await sh('tailscale', ['status', '--self', '--json'], { timeout: 10000 })).stdout);
+    if (j && j.Self && j.Self.DNSName) return j.Self.DNSName.replace(/\.$/, '');
+  } catch (e) {}
+  return '';
+}
+
+async function startWebServer(folder) {
+  if (webServerStarting) throw new Error('すでに処理中です');
+  if (webServer && webFolder === folder) return null;
+  if (webServer && webFolder !== folder) {
+    await stopWebServer();
+  }
+  const abs = path.join(ROOT_DIR, folder);
+  if (!fs.existsSync(abs) || !fs.statSync(abs).isDirectory()) {
+    throw new Error('公開するフォルダが見つかりません: ' + folder);
+  }
+  webServerStarting = true;
+  try {
+    webFolder = folder;
+    refreshWebStatic();
+    if (!webServer) {
+      const srv = http.createServer(webExpress);
+      await new Promise((resolve, reject) => {
+        srv.once('error', reject);
+        srv.listen(WEB_SERVE_PORT, '127.0.0.1', resolve);
+      });
+      webServer = srv;
+    }
+    // Tailscale Serve で 3358 を公開
+    const serveStatus = (await sh('tailscale', ['serve', 'status'], { timeout: 15000 }).catch(() => '')).stdout || '';
+    if (serveStatus.includes(':' + WEB_SERVE_PORT)) {
+      await sh('tailscale', ['serve', '--https=' + WEB_SERVE_PORT, 'off'], { timeout: 20000 }).catch(() => {});
+    }
+    await sh('tailscale', ['serve', '--bg', '--https=' + WEB_SERVE_PORT, 'http://127.0.0.1:' + WEB_SERVE_PORT], { timeout: 30000 });
+    return { folder, port: WEB_SERVE_PORT };
+  } catch (e) {
+    webFolder = '';
+    throw e;
+  } finally {
+    webServerStarting = false;
+  }
+}
+
+async function stopWebServer() {
+  if (webServerStarting) throw new Error('すでに処理中です');
+  webFolder = '';
+  if (webServer) {
+    const srv = webServer;
+    webServer = null;
+    await new Promise(resolve => srv.close(() => resolve()));
+  }
+  await sh('tailscale', ['serve', '--https=' + WEB_SERVE_PORT, 'off'], { timeout: 20000 }).catch(() => {});
+  return true;
+}
+
+app.get('/api/webserver/folders', (req, res) => {
+  try {
+    const dirs = [];
+    for (const ent of fs.readdirSync(ROOT_DIR, { withFileTypes: true })) {
+      if (ent.isDirectory()) dirs.push(ent.name);
+    }
+    dirs.sort((a, b) => a.localeCompare(b, 'ja'));
+    res.json({ success: true, folders: dirs });
+  } catch (e) {
+    sendErr(res, e.message, e.status || 500);
+  }
+});
+
+app.get('/api/webserver/status', async (req, res) => {
+  try {
+    const host = await tailnetHostname();
+    const tailnetBase = host ? ('https://' + host + ':' + WEB_SERVE_PORT) : '';
+    res.json({
+      success: true,
+      running: !!webFolder && !!webServer,
+      folder: webFolder,
+      port: WEB_SERVE_PORT,
+      tailnetBase,
+      starting: webServerStarting
+    });
+  } catch (e) {
+    sendErr(res, e.message, e.status || 500);
+  }
+});
+
+app.post('/api/webserver/start', async (req, res) => {
+  try {
+    const folder = String((req.body && req.body.folder) || '').trim();
+    if (!folder) return sendErr(res, '公開するフォルダを選択してください');
+    if (folder.includes('/') || folder.includes('\\') || folder === '.' || folder === '..') {
+      return sendErr(res, 'フォルダ名が不正です');
+    }
+    const r = await startWebServer(folder);
+    res.json({ success: true, folder, port: WEB_SERVE_PORT, started: !!r });
+  } catch (e) {
+    sendErr(res, e.message, e.status || 500);
+  }
+});
+
+app.post('/api/webserver/stop', async (req, res) => {
+  try {
+    await stopWebServer();
+    res.json({ success: true });
+  } catch (e) {
+    sendErr(res, e.message, e.status || 500);
+  }
 });
 
 app.listen(PORT, HOST, () => {
