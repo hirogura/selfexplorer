@@ -877,10 +877,14 @@ function regenerateServerFromTemplate() {
   const secret    = ooCurrentServerSecret();
   let src;
   try { src = fs.readFileSync(tpl, 'utf8'); } catch (e) { return false; }
-  src = src.split('__PORT__').join(port)
-           .split('__OO_PORT__').join(ooPort)
-           .split('__ROOT_DIR__').join(rootDir)
-           .split('__OO_SECRET__').join(secret);
+  /* プレースホルダトークン(例: __PORT__)は文字列連結で構成する。
+     インストール時のグローバル sed(s,__PORT__,VAL,g) で関数内の
+     リテラル文字列が書き換えられるのを防ぐため。 */
+  const tok = k => '_' + '_' + k + '_' + '_';
+  src = src.split(tok('PORT')).join(port)
+           .split(tok('OO_PORT')).join(ooPort)
+           .split(tok('ROOT_DIR')).join(rootDir)
+           .split(tok('OO_SECRET')).join(secret);
   try {
     fs.writeFileSync(out, src);
     return true;
