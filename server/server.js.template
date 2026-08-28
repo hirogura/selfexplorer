@@ -860,6 +860,33 @@ app.get('/api/version', async (req, res) => {
 });
 
 let upUpdating = false;
+/* server.js.template の変更を、実行中の server.js に再生成して反映する。
+   server/server.js はシークレットを含むため git 管理対象外で、
+   git pull で更新されるのは server.js.template のみ。
+   インストール時と同じ置換（PORT / OO_PORT / ROOT_DIR / OO_SECRET）を、
+   現在の設定値（既存 server.js から抽出）を保持したまま再適用する。 */
+function regenerateServerFromTemplate() {
+  const tpl = path.join(__dirname, 'server.js.template');
+  const out = path.join(__dirname, 'server.js');
+  let cur = '';
+  try { cur = fs.readFileSync(out, 'utf8'); } catch (e) {}
+  const grab = re => { const m = cur.match(re); return m ? m[1] : ''; };
+  const port      = grab(/process\.env\.PORT \|\| '([^']*)'/)        || process.env.PORT || '3346';
+  const ooPort    = grab(/process\.env\.ONLYOFFICE_PORT \|\| '([^']*)'/) || process.env.ONLYOFFICE_PORT || '3322';
+  const rootDir   = grab(/process\.env\.ROOT_DIR \|\| '([^']*)'/)    || process.env.ROOT_DIR || '/opt/lxd-data';
+  const secret    = ooCurrentServerSecret();
+  let src;
+  try { src = fs.readFileSync(tpl, 'utf8'); } catch (e) { return false; }
+  src = src.split('__PORT__').join(port)
+           .split('__OO_PORT__').join(ooPort)
+           .split('__ROOT_DIR__').join(rootDir)
+           .split('__OO_SECRET__').join(secret);
+  try {
+    fs.writeFileSync(out, src);
+    return true;
+  } catch (e) { return false; }
+}
+
 app.get('/api/update', (req, res) => {
   if (upUpdating) return sendErr(res, 'アップデートがすでに進行中です', 409);
   upUpdating = true;
@@ -894,7 +921,12 @@ app.get('/api/update', (req, res) => {
       try {
         changed = (await sh('git', ['diff', '--name-only', oldHead + '..HEAD'], { cwd: repoDir })).stdout.split('\n').filter(Boolean);
       } catch (e) {}
-      const needRestart = changed.some(f => f.startsWith('server/'));
+      const serverChanged = changed.some(f => f.startsWith('server/'));
+      if (serverChanged) {
+        log('サーバー側の変更があります。server.js を再生成します...');
+        regenerateServerFromTemplate();
+      }
+      const needRestart = serverChanged;
       log(changed.length ? '更新ファイル: ' + changed.length + ' 件' : '更新はありません');
       if (needRestart) log('サーバー側の変更があるため「再起動」が必要です');
       send('done', { ok: true, changedFiles: changed.length, needRestart });
@@ -910,6 +942,7 @@ app.get('/api/update', (req, res) => {
 app.post('/api/restart', (req, res) => {
   res.json({ success: true, restarting: true });
   setTimeout(() => {
+    regenerateServerFromTemplate();
     sh('systemctl', ['restart', OO_SERVICE_NAME]).catch(e => console.error('restart failed:', e.message));
   }, 300);
 });
