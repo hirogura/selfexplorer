@@ -198,3 +198,20 @@ body{font-family:"Segoe UI Variable","Segoe UI",system-ui,-apple-system,sans-ser
 .web-actions .oo-btn{flex:1}
 .web-start-row{display:flex;align-items:center;gap:8px}
 .web-url{font-size:11px;color:var(--text-secondary);word-break:break-all;background:var(--bg-hover);border-radius:var(--radius-sm);padding:6px 8px;line-height:1.5}
+/* URL行＋コピーボタン */
+.url-row{display:flex;gap:6px;align-items:stretch}
+.url-row .web-url{flex:1;min-width:0}
+.url-row .web-url:empty{display:none}
+.copy-btn{flex-shrink:0;display:inline-flex;align-items:center;justify-content:center;width:30px;border:1px solid var(--border-color);border-radius:var(--radius-sm);background:var(--bg-primary);color:var(--text-secondary);cursor:pointer;transition:background .1s,color .1s}
+.copy-btn:hover{background:var(--bg-hover);color:var(--text-primary)}
+/* 自動起動トグル */
+.oo-btn.autostart.on{border-color:#2da44e;color:#1a7f37}
+.oo-btn.autostart.on:hover{background:#e9f7ef}
+.oo-btn.autostart.off{color:var(--text-tertiary)}
+/* Samba パネル */
+.smb-body{display:flex;flex-direction:column;gap:8px}
+.smb-input{font-size:13px;padding:6px 10px}
+.smb-input:disabled{opacity:.5;background:var(--bg-secondary)}
+.smb-check{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text-secondary);cursor:pointer;user-select:none}
+.smb-check input{width:14px;height:14px;accent-color:var(--accent-color);cursor:pointer}
+.smb-detail{font-size:11px;color:var(--text-secondary);line-height:1.5;word-break:break-all}

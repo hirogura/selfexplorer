@@ -93,8 +93,55 @@
                   <button class="oo-btn primary" id="web-start-btn">起動</button>
                   <button class="oo-btn" id="web-stop-btn" disabled>停止</button>
                 </div>
-                <div class="web-url" id="web-url"></div>
+                <div class="url-row">
+                  <div class="web-url" id="web-url"></div>
+                  <button class="copy-btn" id="web-copy-btn" title="URLをコピー"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg></button>
+                </div>
+                <button class="oo-btn autostart on" id="web-autostart-btn" title="PC起動時の自動起動を切り替え">自動起動: ON</button>
               </div>
+            </div>
+            <div class="oo-card" id="smb-card" style="margin-top:10px">
+              <div class="oo-card-header">
+                <span class="oo-logo"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#16a34a" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/></svg></span>
+                <div class="oo-title-wrap">
+                  <div class="oo-title">Samba</div>
+                  <div class="oo-status"><span id="smb-status-text">状態確認中...</span></div>
+                </div>
+                <button class="oo-refresh" id="smb-refresh" title="状態を再確認"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/></svg></button>
+              </div>
+              <div class="oo-notice" id="smb-notice" hidden></div>
+              <div class="smb-body" id="smb-body" hidden>
+                <label class="web-label" for="smb-folder-select">公開フォルダ</label>
+                <select id="smb-folder-select" class="web-select">
+                  <option value="">-- フォルダを選択 --</option>
+                </select>
+                <label class="web-label" for="smb-username">ユーザー名</label>
+                <input type="text" id="smb-username" class="dialog-input smb-input" placeholder="例: shareuser" autocomplete="off">
+                <label class="web-label" for="smb-password">パスワード</label>
+                <input type="password" id="smb-password" class="dialog-input smb-input" placeholder="パスワード（変更しない場合は空欄）" autocomplete="new-password">
+                <label class="smb-check"><input type="checkbox" id="smb-guest"> 匿名アクセスを許可（ゲストOK）</label>
+                <label class="web-label" for="smb-access">アクセス権</label>
+                <select id="smb-access" class="web-select">
+                  <option value="rw">読み書き可</option>
+                  <option value="ro">読み取り専用</option>
+                </select>
+                <div class="web-actions">
+                  <button class="oo-btn primary" id="smb-start-btn">公開</button>
+                  <button class="oo-btn" id="smb-stop-btn" disabled>停止</button>
+                </div>
+                <div class="url-row">
+                  <div class="web-url" id="smb-url"></div>
+                  <button class="copy-btn" id="smb-copy-btn" title="パスをコピー"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg></button>
+                </div>
+                <div class="url-row">
+                  <div class="web-url" id="smb-url2"></div>
+                  <button class="copy-btn" id="smb-copy-btn2" title="URLをコピー"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg></button>
+                </div>
+                <button class="oo-btn autostart on" id="smb-autostart-btn" title="PC起動時の自動起動を切り替え">自動起動: ON</button>
+                <div class="smb-detail" id="smb-detail"></div>
+              </div>
+              <div class="oo-actions" id="smb-actions"></div>
+              <pre class="oo-log" id="smb-log" hidden></pre>
             </div>
           </div>
         </div>
