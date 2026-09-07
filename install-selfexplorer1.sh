@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-#  SelfExplorer v11 セットアップスクリプト（GitHub版）
+#  SelfExplorer v1.4.0 セットアップスクリプト（GitHub版）
 #  - https://github.com/hirogura/selfexplorer からクローン
 #  - /opt/selfexplorer に配置、/opt/lxd-data をブラウズ対象
 #  - ポート 3346 / systemd サービス / Tailscale Serve 対応
@@ -105,16 +105,16 @@ ok "クローン完了"
 # ── OnlyOffice シークレット生成 ───────────────────────────────────────────────
 OO_SECRET=$(python3 -c "import secrets; print(secrets.token_hex(32))")
 
-# ── 設定を反映 (server.js.template から生成 / app.js を書き換え) ──────────────
+# ── 設定を反映 (server.js.template から生成) ──────────────
 # 注意: server.js はシークレットを含むためリポジトリに含めない
 #       (.gitignore で追跡除外)。テンプレートから生成する。
+#       フロントの ROOT_PREFIX は /api/config から取得するため app.js の書き換えは不要。
 info "設定を反映..."
 cp -f "${INSTALL_DIR}/server/server.js.template" "${INSTALL_DIR}/server/server.js"
 sed -i "s,__PORT__,${PORT},g" "${INSTALL_DIR}/server/server.js"
 sed -i "s,__ROOT_DIR__,${BROWSE_ROOT},g" "${INSTALL_DIR}/server/server.js"
 sed -i "s,__OO_PORT__,${OO_PORT},g" "${INSTALL_DIR}/server/server.js"
 sed -i "s,__OO_SECRET__,${OO_SECRET},g" "${INSTALL_DIR}/server/server.js"
-sed -i "s,const ROOT_PREFIX='[^']*',const ROOT_PREFIX='${BROWSE_ROOT}'," "${INSTALL_DIR}/public/js/app.js"
 ok "設定反映完了"
 
 # ── OnlyOffice セットアップ ──────────────────────────────────────────────────
@@ -123,7 +123,7 @@ info "OnlyOffice はインストールしません"
 # ── npm install ───────────────────────────────────────────────────────────────
 info "npm install 実行中..."
 cd "${INSTALL_DIR}/server"
-npm install --production 2>&1 | tail -3
+npm install --omit=dev 2>&1 | tail -3
 ok "npm install 完了"
 
 # ── systemd サービス作成 ─────────────────────────────────────────────────────
@@ -195,7 +195,7 @@ fi
 # ── 完了サマリー ──────────────────────────────────────────────────────────────
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-ok "SelfExplorer v11 セットアップ完了！"
+ok "SelfExplorer v1.4.0 セットアップ完了！"
 echo ""
 if [ -n "${TS_HOSTNAME}" ]; then
   echo "  SelfExplorer : https://${TS_HOSTNAME}:${PORT}"

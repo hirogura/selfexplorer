@@ -16,20 +16,28 @@
   <script>
     const params = new URLSearchParams(window.location.search);
     const filePath = params.get('path');
+    const placeholder = document.getElementById('placeholder');
+    function showError(msg) {
+      placeholder.textContent = '';
+      const div = document.createElement('div');
+      div.className = 'loading';
+      div.textContent = msg;
+      placeholder.appendChild(div);
+    }
     if (!filePath) {
-      document.getElementById('placeholder').innerHTML = '<div class="loading">ファイルが指定されていません</div>';
+      showError('ファイルが指定されていません');
     } else {
       fetch(`/api/onlyoffice/config?path=${encodeURIComponent(filePath)}`)
         .then(r => r.json())
         .then(data => {
-          if (!data.success) { document.getElementById('placeholder').innerHTML = `<div class="loading">エラー: ${data.error}</div>`; return; }
+          if (!data.success) { showError(`エラー: ${data.error}`); return; }
           const script = document.createElement('script');
           script.src = `${data.editorUrl}/web-apps/apps/api/documents/api.js`;
-          script.onload = () => { try { new DocsAPI.DocEditor('placeholder', data.config); } catch (e) { document.getElementById('placeholder').innerHTML = `<div class="loading">エディタの初期化に失敗しました: ${e.message}</div>`; } };
-          script.onerror = () => { document.getElementById('placeholder').innerHTML = '<div class="loading">OnlyOffice スクリプトの読み込みに失敗しました</div>'; };
+          script.onload = () => { try { new DocsAPI.DocEditor('placeholder', data.config); } catch (e) { showError(`エディタの初期化に失敗しました: ${e.message}`); } };
+          script.onerror = () => { showError('OnlyOffice スクリプトの読み込みに失敗しました'); };
           document.head.appendChild(script);
         })
-        .catch(e => { document.getElementById('placeholder').innerHTML = `<div class="loading">エラー: ${e.message}</div>`; });
+        .catch(e => { showError(`エラー: ${e.message}`); });
     }
   </script>
 </body>

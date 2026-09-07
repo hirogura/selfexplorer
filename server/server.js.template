@@ -283,7 +283,8 @@ function publicHost(req) {
 }
 
 function swapPort(host, port) {
-  return host.replace(/:\d+$/, ':' + port);
+  if (/:\d+$/.test(host)) return host.replace(/:\d+$/, ':' + port);
+  return host + ':' + port;
 }
 
 function docBase(req) {
@@ -506,10 +507,16 @@ app.post('/api/createfile', (req, res) => {
 const uploader = multer({
   storage: multer.diskStorage({
     destination: (req, file, cb) => {
-      try { cb(null, safeResolve(req.query.path)); } catch (e) { cb(e); }
+      try {
+        const dir = safeResolve(req.query.path);
+        if (!isDir(dir)) return cb(new Error('アップロード先がフォルダではありません'));
+        cb(null, dir);
+      } catch (e) { cb(e); }
     },
     filename: (req, file, cb) => {
-      cb(null, path.basename(file.originalname).replace(/[\\/:*?"<>|]/g, '_'));
+      let n = path.basename(file.originalname).replace(/[\\/:*?"<>|]/g, '_');
+      if (!n || n === '.' || n === '..') n = 'upload';
+      cb(null, n);
     }
   }),
   limits: { fileSize: 2 * 1024 * 1024 * 1024 }
@@ -741,7 +748,7 @@ app.get('/api/onlyoffice/install', (req, res) => {
       try {
         await sh('tailscale', ['version'], { timeout: 10000 });
         const serveStatus = (await sh('tailscale', ['serve', 'status'], { timeout: 15000 })).stdout;
-        if (serveStatus.includes(':' + OO_PORT)) {
+        if (new RegExp(':' + OO_PORT + '(\\b|$)').test(serveStatus)) {
           log('ポート ' + OO_PORT + ' はすでに Tailscale Serve に登録されています');
         } else {
           log('Tailscale Serve にポート ' + OO_PORT + ' を追加...');
@@ -877,8 +884,8 @@ function regenerateServerFromTemplate() {
   const secret    = ooCurrentServerSecret();
   let src;
   try { src = fs.readFileSync(tpl, 'utf8'); } catch (e) { return false; }
-  /* プレースホルダトークン(例: __PORT__)は文字列連結で構成する。
-     インストール時のグローバル sed(s,__PORT__,VAL,g) で関数内の
+  /* プレースホルダトークン(例: アンダースコア2つ+PORT+アンダースコア2つ)は文字列連結で構成する。
+     インストール時のグローバル sed で関数内の
      リテラル文字列が書き換えられるのを防ぐため。 */
   const tok = k => '_' + '_' + k + '_' + '_';
   src = src.split(tok('PORT')).join(port)
@@ -907,6 +914,12 @@ app.get('/api/update', (req, res) => {
     let oldHead = '';
     try { oldHead = (await sh('git', ['rev-parse', 'HEAD'], { cwd: repoDir })).stdout.trim(); } catch (e) {}
     log('GitHub から最新版を取得します (git pull --ff-only)');
+    /* 旧インストーラが public/js/app.js の ROOT_PREFIX を sed 書き換えしていた環境では
+       git pull がローカル変更で失敗するため、設定差分のみを事前に破棄して回復させる。
+       v1.4.0 以降は /api/config で取得するため書き換えは不要。 */
+    try {
+      await sh('git', ['checkout', '--', 'public/js/app.js'], { cwd: repoDir, timeout: 20000 });
+    } catch (e) {}
     const child = spawn('git', ['pull', '--ff-only'], { cwd: repoDir });
     let buf = '';
     const pump = d => {
@@ -965,6 +978,19 @@ function refreshWebStatic() {
   webStaticMid = express.static(path.join(ROOT_DIR, webFolder), { fallthrough: true });
 }
 
+/* /_status は認証なしのヘルスチェック用。静的配信ミドルウェアより先に登録する
+  （後に登録すると稼働中はフォルダ prefix チェックで 404 になってしまう）。 */
+webExpress.get('/_status', (req, res) => {
+  res.json({ running: !!webFolder && !!webServer, folder: webFolder, port: WEB_SERVE_PORT });
+});
+
+function webSafeAbs(folder, rel) {
+  const abs = path.resolve(ROOT_DIR, folder, rel || '');
+  const base = path.resolve(ROOT_DIR, folder);
+  if (abs !== base && !abs.startsWith(base + path.sep)) return null;
+  return abs;
+}
+
 webExpress.use((req, res, next) => {
   if (!webFolder) return res.status(503).send('Web server is not running');
   const folder = webFolder;
@@ -972,23 +998,29 @@ webExpress.use((req, res, next) => {
   if (p === '/') p = '/' + folder + '/';
   if (p === '/' + folder) p = '/' + folder + '/';
   if (!p.startsWith('/' + folder + '/')) return res.status(404).send('Not found');
+  /* req.path は Express がデコード済みのため decodeURIComponent しない
+    （二重デコードするとファイル名の % で URIError になる）。 */
   const rel = p.slice(folder.length + 2);
-  const abs = path.join(ROOT_DIR, folder, rel);
+  const abs = webSafeAbs(folder, rel);
+  if (!abs) return res.status(403).send('Forbidden');
+  const q = req.url.indexOf('?');
+  const qs = q >= 0 ? req.url.slice(q) : '';
   try {
     if (fs.statSync(abs).isDirectory()) {
       if (fs.existsSync(path.join(abs, 'index.html'))) {
-        req.url = '/' + (rel ? rel + '/' : '') + 'index.html';
+        req.url = '/' + (rel ? rel.replace(/\/+$/, '') + '/' : '') + 'index.html' + qs;
         return webStaticMid(req, res, next);
       }
       return sendWebListing(res, folder, rel);
     }
   } catch (e) {}
-  req.url = '/' + rel;
+  req.url = '/' + rel + qs;
   return webStaticMid(req, res, next);
 });
 
 function sendWebListing(res, folder, rel) {
-  const abs = path.join(ROOT_DIR, folder, rel);
+  const abs = webSafeAbs(folder, rel);
+  if (!abs) return res.status(403).send('Forbidden');
   let entries;
   try {
     entries = fs.readdirSync(abs, { withFileTypes: true });
@@ -999,10 +1031,12 @@ function sendWebListing(res, folder, rel) {
     if (a.isDirectory() !== b.isDirectory()) return a.isDirectory() ? -1 : 1;
     return a.name.localeCompare(b.name, 'ja');
   });
-  const relPath = rel ? ('/' + folder + '/' + rel) : ('/' + folder);
-  const baseHref = encodeURI(relPath.replace(/\/$/, '')) + '/';
+  const relPath = rel ? ('/' + folder + '/' + rel.replace(/\/+$/, '')) : ('/' + folder);
+  const parentHref = rel && rel.replace(/\/+$/, '')
+    ? encodeURI('/' + folder + '/' + rel.replace(/\/+$/, '').split('/').slice(0, -1).join('/')).replace(/\/$/, '') + '/'
+    : '/';
   const rows = [];
-  rows.push('<tr><td><a href="' + baseHref + '">..</a></td><td></td><td></td></tr>');
+  rows.push('<tr><td><a href="' + parentHref + '">..</a></td><td></td><td></td></tr>');
   for (const e of entries) {
     let size = '';
     if (!e.isDirectory()) {
@@ -1018,16 +1052,17 @@ function sendWebListing(res, folder, rel) {
 
 function formatWebSize(b) {
   if (b < 1024) return b + ' B';
-  const k = 1024, s = ['KB', 'MB', 'GB', 'TB'], i = Math.floor(Math.log(b) / Math.log(k));
-  return (b / Math.pow(k, i)).toFixed(1) + ' ' + s[i];
+  const k = 1024, s = ['KB', 'MB', 'GB', 'TB', 'PB', 'EB'], i = Math.min(Math.floor(Math.log(b) / Math.log(k)) - 1, s.length - 1);
+  return (b / Math.pow(k, i + 1)).toFixed(1) + ' ' + s[Math.max(i, 0)];
 }
 
 function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
-webExpress.get('/_status', (req, res) => {
-  res.json({ running: !!webFolder && !!webServer, folder: webFolder, port: WEB_SERVE_PORT });
+/* フロントエンドの表示用設定（ROOT_PREFIX を sed 書き換えなしで取得させる） */
+app.get('/api/config', (req, res) => {
+  res.json({ success: true, rootPrefix: ROOT_DIR });
 });
 
 async function tailnetHostname() {
@@ -1066,8 +1101,8 @@ async function startWebServer(folder) {
       webServer = srv;
     }
     // Tailscale Serve で 3358 を公開
-    const serveStatus = (await sh('tailscale', ['serve', 'status'], { timeout: 15000 }).catch(() => '')).stdout || '';
-    if (serveStatus.includes(':' + WEB_SERVE_PORT)) {
+    const serveStatus = (await sh('tailscale', ['serve', 'status'], { timeout: 15000 }).catch(() => ({ stdout: '' }))).stdout || '';
+    if (new RegExp(':' + WEB_SERVE_PORT + '(\\b|$)').test(serveStatus)) {
       // 既に登録済みなら設定を付け替え
       await sh('tailscale', ['serve', '--https=' + WEB_SERVE_PORT, 'off'], { timeout: 20000 }).catch(() => {});
     }
@@ -1327,6 +1362,9 @@ function smbValidateFolder(folder) {
   if (!folder) throw new Error('公開するフォルダを選択してください');
   if (folder.includes('/') || folder.includes('\\') || folder === '.' || folder === '..') {
     throw new Error('フォルダ名が不正です');
+  }
+  if (/[\[\]\n\r]/.test(folder)) {
+    throw new Error('フォルダ名に使用できない文字が含まれています');
   }
   const abs = path.join(ROOT_DIR, folder);
   if (!fs.existsSync(abs) || !fs.statSync(abs).isDirectory()) {

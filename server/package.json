@@ -1,6 +1,6 @@
 {
   "name": "selfexplorer",
-  "version": "11.0.0",
+  "version": "1.4.0",
   "description": "SelfExplorer - Modern file manager with SVG icons",
   "main": "server.js",
   "scripts": {
