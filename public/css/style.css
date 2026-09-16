@@ -42,7 +42,7 @@ body{font-family:"Segoe UI Variable","Segoe UI",system-ui,-apple-system,sans-ser
 .tree-children{margin-left:14px}
 .resize-handle{width:3px;background:transparent;cursor:col-resize;transition:background .15s;position:relative;z-index:5}
 .resize-handle:hover,.resize-handle:active{background:var(--accent-color)}
-.content{flex:1;display:flex;flex-direction:column;overflow:hidden;background:var(--bg-primary);position:relative}
+.content{flex:1;min-width:0;display:flex;flex-direction:column;overflow:hidden;background:var(--bg-primary);position:relative}
 .toolbar{display:flex;align-items:center;justify-content:space-between;padding:6px 14px;border-bottom:1px solid var(--border-color)}
 .item-count{font-size:12px;color:var(--text-secondary)}
 .sort-controls select{padding:3px 6px;border:1px solid var(--border-color);border-radius:var(--radius-sm);font-size:12px;background:var(--bg-primary);color:var(--text-primary);font-family:inherit}
@@ -218,7 +218,7 @@ body{font-family:"Segoe UI Variable","Segoe UI",system-ui,-apple-system,sans-ser
 .smb-check input{width:14px;height:14px;accent-color:var(--accent-color);cursor:pointer}
 .smb-detail{font-size:11px;color:var(--text-secondary);line-height:1.5;word-break:break-all}
 /* バックアップパネル（画面右半分くらい） */
-.backup-panel{width:480px;max-width:50vw;min-width:360px;background:var(--bg-primary);border-left:1px solid var(--border-color);display:flex;flex-direction:column;overflow:hidden}
+.backup-panel{width:320px;flex-shrink:0;background:var(--bg-primary);border-left:1px solid var(--border-color);display:flex;flex-direction:column;overflow:hidden}
 .backup-panel.hidden{display:none}
 .backup-panel .sidebar-header{display:flex;align-items:center;justify-content:space-between}
 .backup-panel-body{flex:1;overflow-y:auto;padding:10px}
@@ -240,3 +240,14 @@ body{font-family:"Segoe UI Variable","Segoe UI",system-ui,-apple-system,sans-ser
 .bk-diag:empty{display:none}
 .bk-fixed{font-size:12px;color:var(--text-secondary)}
 .bk-fixed code{background:var(--bg-secondary);padding:1px 6px;border-radius:5px;font-size:11px}
+#bk-time-row{display:flex;flex-direction:column;gap:8px}
+#bk-times{display:flex;flex-wrap:wrap;gap:6px}
+#bk-times:empty{display:none}
+.bk-time-row{display:inline-flex;gap:4px;align-items:center;background:var(--bg-secondary);border:1px solid var(--border-color);border-radius:var(--radius-sm);padding:3px 4px 3px 8px}
+.bk-time-row input[type="time"]{border:none;background:none;font-size:13px;color:var(--text-primary);font-family:inherit;outline:none}
+.bk-time-row button{background:none;border:none;cursor:pointer;color:var(--danger-color);font-size:12px;padding:2px 4px;border-radius:var(--radius-sm)}
+.bk-time-row button:hover{background:var(--bg-hover)}
+#bk-days{display:flex;gap:6px;flex-wrap:wrap}
+#bk-days .day-btn{min-width:32px;text-align:center;padding:6px 8px;font-size:13px;border:1px solid var(--border-color);border-radius:var(--radius-sm);cursor:pointer;background:var(--bg-primary);color:var(--text-secondary);user-select:none}
+#bk-days .day-btn.on{background:var(--accent-color);border-color:var(--accent-color);color:#fff}
+.bk-mini-btn{flex-shrink:0;width:auto;padding:7px 12px}

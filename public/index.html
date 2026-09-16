@@ -209,14 +209,31 @@
                 <div class="oo-title">実行・監視</div>
               </div>
             </div>
-            <label class="web-label" for="bk-interval">監視間隔</label>
-            <select id="bk-interval" class="web-select">
-              <option value="60">1分ごと</option>
-              <option value="300">5分ごと</option>
-              <option value="900">15分ごと</option>
-              <option value="1800">30分ごと</option>
-              <option value="3600">60分ごと</option>
+            <label class="web-label" for="bk-mode">監視方式</label>
+            <select id="bk-mode" class="web-select">
+              <option value="interval">間隔で実行</option>
+              <option value="time">指定時刻に実行</option>
             </select>
+            <div id="bk-interval-row">
+              <label class="web-label" for="bk-interval">監視間隔</label>
+              <select id="bk-interval" class="web-select">
+                <option value="60">1分ごと</option>
+                <option value="300">5分ごと</option>
+                <option value="900">15分ごと</option>
+                <option value="1800">30分ごと</option>
+                <option value="3600">60分ごと</option>
+              </select>
+            </div>
+            <div id="bk-time-row">
+              <label class="web-label">時刻（複数可）</label>
+              <div class="bk-add-row">
+                <span id="bk-times"></span>
+                <button class="oo-btn bk-mini-btn" id="bk-time-add" type="button" title="時刻を追加">＋追加</button>
+              </div>
+              <label class="web-label">曜日</label>
+              <div id="bk-days"></div>
+              <div class="oo-hint">指定した曜日・時刻になったときに実行します。</div>
+            </div>
             <div class="web-actions">
               <button class="oo-btn primary" id="bk-save">設定を保存</button>
               <button class="oo-btn primary" id="bk-run">コピー実行</button>
