@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-#  SelfExplorer v1.4.0 セットアップスクリプト（GitHub版）
+#  SelfExplorer v1.5.0 セットアップスクリプト（GitHub版）
 #  - https://github.com/hirogura/selfexplorer からクローン
 #  - /opt/selfexplorer に配置、/opt/lxd-data をブラウズ対象
 #  - ポート 3346 / systemd サービス / Tailscale Serve 対応
@@ -195,7 +195,7 @@ fi
 # ── 完了サマリー ──────────────────────────────────────────────────────────────
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-ok "SelfExplorer v1.4.0 セットアップ完了！"
+ok "SelfExplorer v1.5.0 セットアップ完了！"
 echo ""
 if [ -n "${TS_HOSTNAME}" ]; then
   echo "  SelfExplorer : https://${TS_HOSTNAME}:${PORT}"

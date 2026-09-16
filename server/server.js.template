@@ -1554,6 +1554,521 @@ app.post('/api/samba/autostart', async (req, res) => {
   }
 });
 
+/* ── バックアップ（rsync + SSH。selfphoto のバックアップ機能と同方式） ──
+   ソース複数・ターゲット1箇所。フォルダ構成を維持するため
+   ターゲット配下にソース相対パスごとにコピーする。
+   固定オプション: -r -t -u -v --progress（除外: .upload-tmp/）。 */
+const BK_FILE = '/var/lib/selfexplorer/backup.json';
+const BK_FIXED_OPTS = ['-r', '-t', '-u', '-v', '--progress'];
+const BK_EXCLUDE = '.upload-tmp/';
+const BK_INTERVALS = [60, 300, 900, 1800, 3600];
+const BK_DEFAULT_INTERVAL = 300;
+const BK_SSH_TIMEOUT = 20000;
+let bkRunning = false;
+let bkLastRun = null;
+let bkWatchTimer = null;
+
+function bkHas(cmd) {
+  const dirs = String(process.env.PATH || '/usr/bin:/bin').split(':');
+  return dirs.some(d => { try { return fs.statSync(path.join(d, cmd)).isFile(); } catch (e) { return false; } });
+}
+
+function bkDefaultConfig() {
+  return {
+    sources: [],
+    target: '',
+    ssh: { enabled: false, host: '', user: '', port: '22', key: '', password: '' },
+    watch: { enabled: false, intervalSec: BK_DEFAULT_INTERVAL },
+    lastRun: null
+  };
+}
+
+function bkLoad() {
+  const cfg = bkDefaultConfig();
+  try {
+    if (fs.existsSync(BK_FILE)) {
+      const saved = JSON.parse(fs.readFileSync(BK_FILE, 'utf8'));
+      if (saved && typeof saved === 'object') {
+        if (Array.isArray(saved.sources)) cfg.sources = saved.sources.filter(s => typeof s === 'string');
+        if (typeof saved.target === 'string') cfg.target = saved.target;
+        if (saved.ssh && typeof saved.ssh === 'object') {
+          for (const k of ['enabled', 'host', 'user', 'port', 'key', 'password']) {
+            if (k in saved.ssh) cfg.ssh[k] = k === 'enabled' ? !!saved.ssh[k] : String(saved.ssh[k] || '');
+          }
+        }
+        if (saved.watch && typeof saved.watch === 'object') {
+          if ('enabled' in saved.watch) cfg.watch.enabled = !!saved.watch.enabled;
+          const iv = parseInt(saved.watch.intervalSec, 10);
+          cfg.watch.intervalSec = BK_INTERVALS.includes(iv) ? iv : BK_DEFAULT_INTERVAL;
+        }
+        if (saved.lastRun && typeof saved.lastRun === 'object') { cfg.lastRun = saved.lastRun; bkLastRun = saved.lastRun; }
+      }
+    }
+  } catch (e) {}
+  return cfg;
+}
+
+function bkSave(cfg) {
+  try { fs.mkdirSync(path.dirname(BK_FILE), { recursive: true }); } catch (e) {}
+  const tmp = BK_FILE + '.tmp';
+  fs.writeFileSync(tmp, JSON.stringify(cfg, null, 2));
+  fs.renameSync(tmp, BK_FILE);
+  try { fs.chmodSync(BK_FILE, 0o600); } catch (e) {}
+}
+
+function bkNormSources(list) {
+  const out = [];
+  for (const s of (Array.isArray(list) ? list : [])) {
+    const t = String(s || '').trim().replace(/^\/+|\/+$/g, '');
+    if (!t || t === '.' || t === '..' || t.includes('\\')) continue;
+    if (t.split('/').includes('..')) continue;
+    if (!out.includes(t)) out.push(t);
+  }
+  return out;
+}
+
+function bkCheckSourceDir(rel) {
+  if (!rel) return 'source required';
+  let abs;
+  try { abs = safeResolve(rel); } catch (e) { return 'invalid source path'; }
+  try {
+    if (!fs.statSync(abs).isDirectory()) return 'source is not a folder: ' + rel;
+  } catch (e) { return 'source not found: ' + rel; }
+  return null;
+}
+
+/* 保存時バリデーション（target 空は許容）。実行時は forRun=true で厳密に。 */
+function bkValidate(cfg, forRun) {
+  const ssh = cfg.ssh || {};
+  for (const s of (cfg.sources || [])) {
+    const err = bkCheckSourceDir(s);
+    if (err) return err;
+  }
+  if (forRun && (!cfg.sources || !cfg.sources.length)) return 'source required';
+  const tgt = String(cfg.target || '').trim();
+  if (forRun && !tgt) return 'target required';
+  if (tgt) {
+    if (ssh.enabled && (ssh.host || '').trim()) {
+      const rp = bkParseRemote(tgt);
+      if (!rp || !/^(\/|~)/.test(rp)) return 'remote target must be absolute path';
+    } else if (!path.isAbsolute(tgt)) {
+      return 'target must be absolute';
+    }
+  }
+  if (ssh.enabled && !(ssh.host || '').trim()) return 'ssh host required';
+  const iv = parseInt((cfg.watch || {}).intervalSec, 10);
+  if (!BK_INTERVALS.includes(iv)) return 'bad interval';
+  return null;
+}
+
+function bkSshDest(ssh) {
+  const host = String((ssh || {}).host || '').trim();
+  const user = String((ssh || {}).user || '').trim();
+  return user ? (user + '@' + host) : host;
+}
+
+function bkSshArgs(ssh) {
+  const args = ['ssh', '-o', 'StrictHostKeyChecking=no', '-o', 'ConnectTimeout=10'];
+  const port = String((ssh || {}).port || '22').trim() || '22';
+  if (port !== '22') args.push('-p', port);
+  const key = String((ssh || {}).key || '').trim();
+  if (key) args.push('-i', key);
+  return args;
+}
+
+function bkSshEnv(ssh) {
+  const pw = String((ssh || {}).password || '');
+  if (pw && bkHas('sshpass')) return { SSHPASS: pw };
+  return {};
+}
+
+function bkSshPrefix(ssh) {
+  return Object.keys(bkSshEnv(ssh)).length ? ['sshpass', '-e'] : [];
+}
+
+function bkParseRemote(tgt) {
+  const t = String(tgt || '').trim();
+  if (t.includes(':')) return t.slice(t.lastIndexOf(':') + 1).trim() || t;
+  return t;
+}
+
+function bkExec(cmd, args, envAdd, timeoutMs) {
+  return new Promise((resolve, reject) => {
+    execFile(cmd, args, {
+      timeout: timeoutMs || 30000,
+      maxBuffer: 4 * 1024 * 1024,
+      env: Object.assign({}, process.env, envAdd || {})
+    }, (err, stdout, stderr) => {
+      if (err) { err.stdout = stdout; err.stderr = stderr; return reject(err); }
+      resolve({ stdout: stdout || '', stderr: stderr || '' });
+    });
+  });
+}
+
+function bkSshDiag(ssh) {
+  let runUser = 'uid=' + (typeof process.getuid === 'function' ? process.getuid() : '?');
+  try { runUser = require('os').userInfo().username; } catch (e) {}
+  const home = require('os').homedir();
+  const key = String((ssh || {}).key || '').trim();
+  const keyInfo = { specified: !!key };
+  if (key) {
+    try {
+      const st = fs.statSync(key);
+      keyInfo.path = key;
+      keyInfo.exists = st.isFile();
+      try { fs.accessSync(key, fs.constants.R_OK); keyInfo.readable = true; } catch (e) { keyInfo.readable = false; }
+    } catch (e) { keyInfo.path = key; keyInfo.exists = false; keyInfo.readable = false; }
+  }
+  const defaults = [];
+  for (const n of ['id_ed25519', 'id_ecdsa', 'id_rsa']) {
+    try { if (fs.statSync(path.join(home, '.ssh', n)).isFile()) defaults.push(n); } catch (e) {}
+  }
+  return {
+    runUser, home,
+    sshpassAvailable: bkHas('sshpass'),
+    passwordSet: !!((ssh || {}).password),
+    key: keyInfo,
+    defaultKeys: defaults
+  };
+}
+
+function bkSshHint(ssh, diag) {
+  const hints = [];
+  if (diag.passwordSet && !diag.sshpassAvailable) {
+    hints.push('パスワードが入力されていますが sshpass が無いためパスワード認証に使われていません (apt install sshpass が必要)。');
+  }
+  const k = diag.key || {};
+  if (k.specified) {
+    if (!k.exists) hints.push('鍵ファイル ' + k.path + ' がサーバー上に存在しません (サーバーから見える絶対パスを指定してください)。');
+    else if (!k.readable) hints.push('鍵ファイル ' + k.path + ' が読み取れません (パーミッションを確認)。');
+  } else if (!(diag.defaultKeys || []).length) {
+    hints.push('サーバー実行ユーザー(' + diag.runUser + ')の ' + diag.home + '/.ssh に秘密鍵が無く、鍵ファイルも未指定です。サーバー用の鍵を作って転送先に登録するか、鍵ファイルに絶対パスを指定してください。');
+  }
+  if (!hints.length) hints.push('転送先の authorized_keys・ユーザー名・パスワードを確認してください。');
+  return hints.join(' ');
+}
+
+function bkSshFull(ssh, extra) {
+  const full = bkSshPrefix(ssh).concat(bkSshArgs(ssh)).concat(extra || []);
+  return { cmd: full[0], args: full.slice(1) };
+}
+
+async function bkTestSsh(ssh) {
+  const host = String((ssh || {}).host || '').trim();
+  if (!host) return { ok: false, error: 'ssh host required' };
+  if (!bkHas('ssh')) return { ok: false, error: 'ssh not found' };
+  const diag = bkSshDiag(ssh);
+  if (diag.passwordSet && !diag.sshpassAvailable) {
+    return { ok: false, error: 'パスワード認証できません: sshpass が未導入のため無視されます。apt install sshpass で導入するか、鍵認証を使ってください。', diagnostics: diag };
+  }
+  const dest = bkSshDest(ssh);
+  try {
+    const full = bkSshFull(ssh, [dest, 'echo', 'ok']);
+    const r = await bkExec(full.cmd, full.args, bkSshEnv(ssh), BK_SSH_TIMEOUT);
+    if ((r.stdout || '').trim().endsWith('ok')) return { ok: true, message: 'SSH接続OK', diagnostics: diag };
+    return { ok: false, error: 'ssh connection failed: ' + ((r.stdout + r.stderr) || '').trim().slice(0, 2000), diagnostics: diag };
+  } catch (e) {
+    const log = String((e.stdout || '') + (e.stderr || '') + (e.message || '')).slice(0, 2000);
+    let err = 'ssh connection failed: ' + log;
+    if (/Permission denied/i.test(log)) err += ' [ヒント: ' + bkSshHint(ssh, diag) + ']';
+    return { ok: false, error: err, diagnostics: diag };
+  }
+}
+
+async function bkCheckTarget(target, ssh, create) {
+  const tgt = String(target || '').trim();
+  if (!tgt) return { ok: false, error: 'target required' };
+  const useSsh = !!((ssh || {}).enabled && String((ssh || {}).host || '').trim());
+  if (useSsh) {
+    const remote = bkParseRemote(tgt);
+    if (!remote || !/^(\/|~)/.test(remote)) return { ok: false, error: 'remote target must be absolute path' };
+    if (!bkHas('ssh')) return { ok: false, error: 'ssh not found' };
+    const dest = bkSshDest(ssh);
+    const env = bkSshEnv(ssh);
+    const run = (args) => { const full = bkSshFull(ssh, [dest].concat(args)); return bkExec(full.cmd, full.args, env, BK_SSH_TIMEOUT); };
+    try {
+      let existed = true;
+      try { await run(['test', '-d', remote]); } catch (e) { existed = false; }
+      if (!existed && create !== false) {
+        try { await run(['mkdir', '-p', remote]); }
+        catch (e) { return { ok: false, error: 'mkdir remote failed: ' + String((e.stdout || '') + (e.stderr || e.message || '')).slice(0, 2000) }; }
+      }
+      try { await run(['test', '-d', remote]); }
+      catch (e) { return { ok: false, error: 'remote target not found: ' + String((e.stdout || '') + (e.stderr || '')).slice(0, 2000) }; }
+      return { ok: true, created: !existed, message: existed ? 'フォルダOK（既存）' : 'フォルダを作成しました' };
+    } catch (e) {
+      return { ok: false, error: String(e.message || e).slice(0, 2000) };
+    }
+  }
+  if (!path.isAbsolute(tgt)) return { ok: false, error: 'target must be absolute' };
+  const existed = (() => { try { return fs.statSync(tgt).isDirectory(); } catch (e) { return false; } })();
+  if (!existed && create !== false) {
+    try { fs.mkdirSync(tgt, { recursive: true }); }
+    catch (e) { return { ok: false, error: 'mkdir target failed: ' + e.message }; }
+  }
+  try {
+    if (!fs.statSync(tgt).isDirectory()) return { ok: false, error: 'target not found' };
+  } catch (e) { return { ok: false, error: 'target not found' }; }
+  try { fs.accessSync(tgt, fs.constants.W_OK | fs.constants.X_OK); }
+  catch (e) { return { ok: false, error: 'target not writable' }; }
+  return { ok: true, created: !existed, message: existed ? 'フォルダOK（既存）' : 'フォルダを作成しました' };
+}
+
+function bkBuildJobs(cfg) {
+  const ssh = cfg.ssh || {};
+  const useSsh = !!(ssh.enabled && String(ssh.host || '').trim());
+  const tgt = String(cfg.target || '').trim();
+  return (cfg.sources || []).map(rel => {
+    const srcAbs = path.join(ROOT_DIR, rel) + '/';
+    let dest, sshCmd = null, envAdd = {};
+    if (useSsh) {
+      const parts = ['ssh', '-o', 'StrictHostKeyChecking=no'];
+      const port = String(ssh.port || '22').trim() || '22';
+      if (port !== '22') parts.push('-p', port);
+      const key = String(ssh.key || '').trim();
+      if (key) parts.push('-i', key);
+      sshCmd = parts.join(' ');
+      const user = String(ssh.user || '').trim();
+      const prefix = user ? (user + '@') : '';
+      const remoteBase = bkParseRemote(tgt).replace(/\/+$/, '');
+      const remoteDest = remoteBase + '/' + rel;
+      dest = prefix + String(ssh.host).trim() + ':' + remoteDest;
+      const pw = String(ssh.password || '');
+      if (pw && bkHas('sshpass')) envAdd.SSHPASS = pw;
+    } else {
+      dest = path.join(tgt, rel) + '/';
+    }
+    let argv = ['rsync'].concat(BK_FIXED_OPTS).concat(['--exclude=' + BK_EXCLUDE]);
+    if (sshCmd) argv = argv.concat(['-e', sshCmd]);
+    if (Object.keys(envAdd).length) argv = ['sshpass', '-e'].concat(argv);
+    argv = argv.concat([srcAbs, dest]);
+    return { rel, srcAbs, dest, argv, envAdd, useSsh };
+  });
+}
+
+function bkRunSpawn(argv, envAdd) {
+  return new Promise((resolve) => {
+    const cmd = argv[0];
+    const args = argv.slice(1);
+    let child;
+    try {
+      child = spawn(cmd, args, { env: Object.assign({}, process.env, envAdd || {}) });
+    } catch (e) {
+      resolve({ code: -1, log: 'spawn failed: ' + (e.message || e) });
+      return;
+    }
+    let out = '';
+    const push = (d) => { out += d.toString(); if (out.length > 60000) out = out.slice(-60000); };
+    child.stdout.on('data', push);
+    child.stderr.on('data', push);
+    const to = setTimeout(() => { try { child.kill('SIGKILL'); } catch (e) {} }, 6 * 3600 * 1000);
+    child.on('error', (e) => { clearTimeout(to); resolve({ code: -1, log: out + '\nspawn error: ' + (e.message || e) }); });
+    child.on('close', (code) => { clearTimeout(to); resolve({ code: code == null ? -1 : code, log: out }); });
+  });
+}
+
+function bkFinish(ok, exitCode, log, started, detail) {
+  bkLastRun = { ok, exitCode, startedAt: started, finishedAt: Date.now() / 1000, logTail: String(log || '').slice(-8000), detail: detail || '' };
+  try {
+    const cfg = bkLoad();
+    cfg.lastRun = bkLastRun;
+    bkSave(cfg);
+  } catch (e) {}
+  return Object.assign({}, bkLastRun);
+}
+
+async function bkRunOnce(detail) {
+  if (bkRunning) return { ok: false, alreadyRunning: true };
+  bkRunning = true;
+  const started = Date.now() / 1000;
+  try {
+    if (!bkHas('rsync')) return bkFinish(false, -1, 'rsync not found (apt install rsync で導入してください)', started, detail);
+    const cfg = bkLoad();
+    const err = bkValidate(cfg, true);
+    if (err) return bkFinish(false, -1, 'invalid config: ' + err, started, detail);
+    const jobs = bkBuildJobs(cfg);
+    let allLog = '';
+    let fail = 0;
+    for (const job of jobs) {
+      if (!job.useSsh) {
+        try { fs.mkdirSync(job.dest, { recursive: true }); }
+        catch (e) { allLog += '\n[' + job.rel + '] mkdir failed: ' + e.message + '\n'; fail++; continue; }
+      } else {
+        const chk = await bkCheckTarget(cfg.target + '/' + job.rel, cfg.ssh, true);
+        if (!chk.ok) { allLog += '\n[' + job.rel + '] target check failed: ' + chk.error + '\n'; fail++; continue; }
+      }
+      allLog += '\n$ ' + job.argv.join(' ') + '\n';
+      const r = await bkRunSpawn(job.argv, job.envAdd);
+      allLog += r.log + '\n';
+      allLog += '[' + job.rel + '] exit ' + r.code + '\n';
+      if (r.code !== 0) fail++;
+    }
+    return bkFinish(fail === 0, fail === 0 ? 0 : 1, allLog, started, detail);
+  } finally {
+    bkRunning = false;
+  }
+}
+
+function bkRunAsync(detail) {
+  if (bkRunning) return { ok: false, alreadyRunning: true };
+  setImmediate(() => { bkRunOnce(detail || 'manual').catch(() => {}); });
+  return { ok: true, started: true };
+}
+
+function bkStatus() {
+  const cfg = bkLoad();
+  return {
+    rsyncAvailable: bkHas('rsync'),
+    running: bkRunning,
+    watching: !!bkWatchTimer,
+    watch: cfg.watch,
+    sources: cfg.sources,
+    target: cfg.target,
+    lastRun: bkLastRun || cfg.lastRun || null
+  };
+}
+
+function bkCurrentInterval() {
+  try {
+    const iv = parseInt(bkLoad().watch.intervalSec, 10);
+    if (BK_INTERVALS.includes(iv)) return iv;
+  } catch (e) {}
+  return BK_DEFAULT_INTERVAL;
+}
+
+function bkSetWatch(enabled) {
+  if (bkWatchTimer) { clearInterval(bkWatchTimer); bkWatchTimer = null; }
+  if (enabled) {
+    const sec = bkCurrentInterval();
+    bkWatchTimer = setInterval(() => { if (!bkRunning) bkRunOnce('watch').catch(() => {}); }, sec * 1000);
+  }
+  return { ok: true, watching: !!bkWatchTimer };
+}
+
+function bkEnsureWatch() {
+  try { if (bkLoad().watch.enabled) bkSetWatch(true); } catch (e) {}
+}
+
+function bkSshFromBody(body) {
+  const saved = bkLoad().ssh || {};
+  const ssh = Object.assign({}, saved);
+  if (body && typeof body.ssh === 'object' && body.ssh) {
+    for (const k of ['enabled', 'host', 'user', 'port', 'key', 'password']) {
+      if (k in body.ssh) {
+        const v = body.ssh[k];
+        ssh[k] = (k === 'enabled') ? !!v : (v == null ? '' : String(v));
+      }
+    }
+    if (body.ssh.password === undefined || body.ssh.password === '' || body.ssh.password === '****') {
+      ssh.password = saved.password || '';
+    }
+  }
+  return ssh;
+}
+
+app.get('/api/backup/config', (req, res) => {
+  try {
+    const cfg = bkLoad();
+    const ssh = Object.assign({}, cfg.ssh, { password: cfg.ssh.password ? '****' : '' });
+    res.json({ success: true, sources: cfg.sources, target: cfg.target, ssh, watch: cfg.watch,
+      fixedOptions: BK_FIXED_OPTS, exclude: BK_EXCLUDE, intervals: BK_INTERVALS,
+      rsyncAvailable: bkHas('rsync'), watching: !!bkWatchTimer, lastRun: bkLastRun || cfg.lastRun || null });
+  } catch (e) { sendErr(res, e.message, e.status || 500); }
+});
+
+app.post('/api/backup/config', (req, res) => {
+  try {
+    const body = req.body || {};
+    const cfg = bkLoad();
+    if ('sources' in body) cfg.sources = bkNormSources(body.sources);
+    if ('target' in body && typeof body.target === 'string') cfg.target = body.target.trim();
+    if (body.ssh && typeof body.ssh === 'object') cfg.ssh = bkSshFromBody(body);
+    if (body.watch && typeof body.watch === 'object') {
+      if ('enabled' in body.watch) cfg.watch.enabled = !!body.watch.enabled;
+      if ('intervalSec' in body.watch) {
+        const iv = parseInt(body.watch.intervalSec, 10);
+        cfg.watch.intervalSec = BK_INTERVALS.includes(iv) ? iv : BK_DEFAULT_INTERVAL;
+      }
+    }
+    const err = bkValidate(cfg, false);
+    if (err) return sendErr(res, err);
+    bkSave(cfg);
+    bkSetWatch(!!cfg.watch.enabled);
+    res.json({ success: true });
+  } catch (e) { sendErr(res, e.message, e.status || 500); }
+});
+
+app.post('/api/backup/sources/add', (req, res) => {
+  try {
+    const rel = String((req.body || {}).path || '').trim().replace(/^\/+|\/+$/g, '');
+    if (!rel) return sendErr(res, 'フォルダを指定してください');
+    const err = bkCheckSourceDir(rel);
+    if (err) return sendErr(res, err);
+    const cfg = bkLoad();
+    const next = bkNormSources((cfg.sources || []).concat([rel]));
+    cfg.sources = next;
+    bkSave(cfg);
+    res.json({ success: true, sources: cfg.sources });
+  } catch (e) { sendErr(res, e.message, e.status || 500); }
+});
+
+app.post('/api/backup/sources/remove', (req, res) => {
+  try {
+    const rel = String((req.body || {}).path || '').trim().replace(/^\/+|\/+$/g, '');
+    const cfg = bkLoad();
+    cfg.sources = (cfg.sources || []).filter(s => s !== rel);
+    bkSave(cfg);
+    res.json({ success: true, sources: cfg.sources });
+  } catch (e) { sendErr(res, e.message, e.status || 500); }
+});
+
+app.post('/api/backup/run', (req, res) => {
+  try {
+    const r = bkRunAsync('manual');
+    if (r.alreadyRunning) return sendErr(res, 'バックアップがすでに実行中です', 409);
+    res.json({ success: true, started: true });
+  } catch (e) { sendErr(res, e.message, e.status || 500); }
+});
+
+app.get('/api/backup/status', (req, res) => {
+  try {
+    const st = bkStatus();
+    res.json(Object.assign({ success: true }, st));
+  } catch (e) { sendErr(res, e.message, e.status || 500); }
+});
+
+app.post('/api/backup/watch', (req, res) => {
+  try {
+    const enabled = !!((req.body || {}).enabled);
+    const cfg = bkLoad();
+    cfg.watch.enabled = enabled;
+    bkSave(cfg);
+    const r = bkSetWatch(enabled);
+    res.json({ success: true, watching: r.watching });
+  } catch (e) { sendErr(res, e.message, e.status || 500); }
+});
+
+app.post('/api/backup/ssh-test', async (req, res) => {
+  try {
+    const ssh = bkSshFromBody(req.body || {});
+    const r = await bkTestSsh(ssh);
+    if (r.ok) res.json({ success: true, message: r.message, diagnostics: r.diagnostics });
+    else res.json({ success: false, error: r.error, diagnostics: r.diagnostics });
+  } catch (e) { sendErr(res, e.message, e.status || 500); }
+});
+
+app.post('/api/backup/target-check', async (req, res) => {
+  try {
+    const body = req.body || {};
+    const target = (typeof body.target === 'string') ? body.target : bkLoad().target;
+    const ssh = bkSshFromBody(body);
+    const r = await bkCheckTarget(target, ssh, true);
+    if (r.ok) res.json({ success: true, message: r.message, created: r.created });
+    else res.json({ success: false, error: r.error });
+  } catch (e) { sendErr(res, e.message, e.status || 500); }
+});
+
+
 /* ── 起動時の自動復元（Web サーバ） ── */
 async function bootRestoreWeb() {
   const saved = webReadSaved();
@@ -1575,4 +2090,5 @@ app.listen(PORT, HOST, () => {
   console.log(`SelfExplorer listening on http://${HOST}:${PORT}`);
   console.log(`Root: ${ROOT_DIR}`);
   bootRestoreWeb();
+  bkEnsureWatch();
 });

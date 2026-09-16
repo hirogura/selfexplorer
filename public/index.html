@@ -27,6 +27,7 @@
         <button class="action-btn" id="btn-mkdir" title="フォルダ作成"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/><line x1="12" y1="11" x2="12" y2="17"/><line x1="9" y1="14" x2="15" y2="14"/></svg></button>
         <button class="action-btn" id="btn-createfile" title="新規ファイル作成"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="18" x2="12" y2="12"/><line x1="9" y1="15" x2="15" y2="15"/></svg></button>
         <button class="action-btn" id="btn-toggle-apps" title="アプリ連携パネル開閉"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><line x1="15" y1="3" x2="15" y2="21"/></svg></button>
+        <button class="action-btn" id="btn-toggle-backup" title="バックアップパネル開閉"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="M6.5 10.5L12 16l5.5-5.5"/><path d="M4 16v3a2 2 0 002 2h12a2 2 0 002-2v-3"/></svg></button>
       </div>
     </header>
     <div class="main-container">
@@ -147,6 +148,87 @@
           </div>
         </div>
       </aside>
+      <aside class="backup-panel hidden" id="backup-panel">
+        <div class="sidebar-header"><h3>バックアップ</h3><button class="oo-refresh" id="bk-close" title="閉じる">✕</button></div>
+        <div class="backup-panel-body">
+          <div class="oo-card" id="bk-main-card">
+            <div class="oo-card-header">
+              <span class="oo-logo"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#0067c0" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="M6.5 10.5L12 16l5.5-5.5"/><path d="M4 16v3a2 2 0 002 2h12a2 2 0 002-2v-3"/></svg></span>
+              <div class="oo-title-wrap">
+                <div class="oo-title">バックアップ設定</div>
+                <div class="oo-status"><span id="bk-status-text">状態確認中...</span></div>
+              </div>
+              <button class="oo-refresh" id="bk-refresh" title="状態を再確認"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/></svg></button>
+            </div>
+            <p class="oo-hint">rsync でソースフォルダをターゲットにコピーします（オプション固定: <code>-r -t -u -v --progress</code>）。フォルダ構成は維持されます。</p>
+            <label class="web-label">ソースフォルダ（複数可）</label>
+            <div class="bk-sources" id="bk-sources"></div>
+            <div class="bk-add-row">
+              <input type="text" id="bk-source-input" class="dialog-input smb-input" placeholder="例: Photos/2026">
+              <button class="oo-btn" id="bk-source-add" title="ソースに追加">追加</button>
+            </div>
+            <div class="oo-hint">フォルダの右クリック「バックアップ追加」でも登録できます。</div>
+            <label class="web-label" for="bk-target">ターゲットフォルダ（1箇所）</label>
+            <input type="text" id="bk-target" class="dialog-input smb-input" placeholder="/mnt/backup/selfexplorer または SSH時はリモートパス">
+            <div class="web-actions">
+              <button class="oo-btn" id="bk-target-check">フォルダ確認</button>
+            </div>
+            <div class="bk-msg" id="bk-target-msg"></div>
+            <div class="bk-fixed">除外: <code>.upload-tmp/</code>（固定）</div>
+          </div>
+          <div class="oo-card" id="bk-ssh-card" style="margin-top:10px">
+            <div class="oo-card-header">
+              <span class="oo-logo"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#7e57c2" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="11" width="20" height="10" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg></span>
+              <div class="oo-title-wrap">
+                <div class="oo-title">SSHリモート接続</div>
+              </div>
+            </div>
+            <label class="smb-check"><input type="checkbox" id="bk-ssh-on"> SSH経由で転送する</label>
+            <div class="smb-body" id="bk-ssh-fields">
+              <label class="web-label" for="bk-ssh-host">ホスト</label>
+              <input type="text" id="bk-ssh-host" class="dialog-input smb-input" placeholder="例: 192.0.2.10" autocomplete="off">
+              <label class="web-label" for="bk-ssh-user">ユーザー</label>
+              <input type="text" id="bk-ssh-user" class="dialog-input smb-input" autocomplete="off">
+              <label class="web-label" for="bk-ssh-port">ポート</label>
+              <input type="text" id="bk-ssh-port" class="dialog-input smb-input" placeholder="22" autocomplete="off">
+              <label class="web-label" for="bk-ssh-key">鍵ファイル</label>
+              <input type="text" id="bk-ssh-key" class="dialog-input smb-input" placeholder="例: /root/.ssh/id_ed25519（任意）" autocomplete="off">
+              <label class="web-label" for="bk-ssh-pw">パスワード</label>
+              <input type="password" id="bk-ssh-pw" class="dialog-input smb-input" placeholder="変更しない場合は空欄" autocomplete="new-password">
+            </div>
+            <div class="web-actions">
+              <button class="oo-btn" id="bk-ssh-test">接続確認</button>
+            </div>
+            <div class="bk-msg" id="bk-ssh-msg"></div>
+            <div class="bk-diag" id="bk-ssh-diag"></div>
+          </div>
+          <div class="oo-card" id="bk-run-card" style="margin-top:10px">
+            <div class="oo-card-header">
+              <span class="oo-logo"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#16a34a" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg></span>
+              <div class="oo-title-wrap">
+                <div class="oo-title">実行・監視</div>
+              </div>
+            </div>
+            <label class="web-label" for="bk-interval">監視間隔</label>
+            <select id="bk-interval" class="web-select">
+              <option value="60">1分ごと</option>
+              <option value="300">5分ごと</option>
+              <option value="900">15分ごと</option>
+              <option value="1800">30分ごと</option>
+              <option value="3600">60分ごと</option>
+            </select>
+            <div class="web-actions">
+              <button class="oo-btn primary" id="bk-save">設定を保存</button>
+              <button class="oo-btn primary" id="bk-run">コピー実行</button>
+            </div>
+            <div class="web-actions">
+              <button class="oo-btn autostart off" id="bk-watch">監視開始</button>
+            </div>
+            <div class="oo-status" id="bk-status"></div>
+            <pre class="oo-log" id="bk-log" hidden></pre>
+          </div>
+        </div>
+      </aside>
     </div>
     <footer class="status-bar"><span id="status-text">準備完了</span></footer>
   </div>
@@ -159,6 +241,7 @@
     <div class="menu-item" data-action="favorite" style="display:none"><svg class="menu-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg> お気に入りに追加</div>
     <div class="menu-item" data-action="copy-path"><svg class="menu-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg> パスをコピー</div>
     <div class="menu-item" data-action="copy-https"><svg class="menu-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71"/></svg> httpsパスをコピー</div>
+    <div class="menu-item" data-action="backup-add"><svg class="menu-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="M6.5 10.5L12 16l5.5-5.5"/><path d="M4 16v3a2 2 0 002 2h12a2 2 0 002-2v-3"/></svg> バックアップ追加</div>
     <div class="menu-divider"></div>
     <div class="menu-item danger" data-action="delete"><svg class="menu-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg> 削除</div>
   </div>
@@ -171,6 +254,7 @@
     <div class="menu-item" data-taction="download"><svg class="menu-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg> ダウンロード</div>
     <div class="menu-divider"></div>
     <div class="menu-item" data-taction="favorite"><svg class="menu-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg> お気に入りに追加</div>
+    <div class="menu-item" data-taction="backup-add"><svg class="menu-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="M6.5 10.5L12 16l5.5-5.5"/><path d="M4 16v3a2 2 0 002 2h12a2 2 0 002-2v-3"/></svg> バックアップ追加</div>
     <div class="menu-divider"></div>
     <div class="menu-item" data-taction="copy-path"><svg class="menu-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg> パスをコピー</div>
   </div>
