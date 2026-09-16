@@ -29,6 +29,7 @@ body{font-family:"Segoe UI Variable","Segoe UI",system-ui,-apple-system,sans-ser
 .main-container{display:flex;flex:1;overflow:hidden}
 .sidebar{width:240px;background:var(--bg-primary);border-right:1px solid var(--border-color);display:flex;flex-direction:column;overflow:hidden}
 .sidebar-header{padding:10px 14px;border-bottom:1px solid var(--border-color)}
+#sidebar .sidebar-header{display:flex;align-items:center;justify-content:space-between}
 .sidebar-header h3{font-size:11px;text-transform:uppercase;color:var(--text-tertiary);letter-spacing:.5px;font-weight:600}
 .tree-container{flex:1;overflow-y:auto;padding:4px 6px}
 .tree-item{user-select:none}
