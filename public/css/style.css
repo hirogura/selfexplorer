@@ -25,6 +25,7 @@ body{font-family:"Segoe UI Variable","Segoe UI",system-ui,-apple-system,sans-ser
 .view-btn,.action-btn{background:none;border:none;padding:6px 10px;cursor:pointer;border-radius:var(--radius-sm);color:var(--text-secondary);transition:background .1s;display:inline-flex;align-items:center;justify-content:center}
 .view-btn:hover,.action-btn:hover{background:var(--bg-hover);color:var(--text-primary)}
 .view-btn.active{background:var(--accent-color);color:white}
+.action-btn.active{background:var(--accent-light);color:var(--accent-color)}
 .main-container{display:flex;flex:1;overflow:hidden}
 .sidebar{width:240px;background:var(--bg-primary);border-right:1px solid var(--border-color);display:flex;flex-direction:column;overflow:hidden}
 .sidebar-header{padding:10px 14px;border-bottom:1px solid var(--border-color)}
@@ -151,6 +152,7 @@ body{font-family:"Segoe UI Variable","Segoe UI",system-ui,-apple-system,sans-ser
 .fav-remove:hover{background:var(--bg-hover);color:var(--danger-color)}
 /* 右サイドバー（アプリ連携） */
 .right-sidebar{width:250px;background:var(--bg-primary);border-left:1px solid var(--border-color);display:flex;flex-direction:column;overflow:hidden}
+.right-sidebar.hidden{display:none}
 .right-sidebar-body{flex:1;overflow-y:auto;padding:10px}
 .oo-card{border:1px solid var(--border-color);border-radius:var(--radius);padding:12px;display:flex;flex-direction:column;gap:10px;background:var(--bg-primary)}
 .oo-card-header{display:flex;align-items:center;gap:8px}
