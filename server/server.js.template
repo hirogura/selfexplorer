@@ -1572,6 +1572,7 @@ let bkRunning = false;
 let bkLastRun = null;
 let bkWatchTimer = null;
 let bkLastFiredMinute = null;
+let bkSshpassInstalling = false;
 
 function bkHas(cmd) {
   const dirs = String(process.env.PATH || '/usr/bin:/bin').split(':');
@@ -1801,7 +1802,7 @@ async function bkTestSsh(ssh) {
   if (!bkHas('ssh')) return { ok: false, error: 'ssh not found' };
   const diag = bkSshDiag(ssh);
   if (diag.passwordSet && !diag.sshpassAvailable) {
-    return { ok: false, error: 'パスワード認証できません: sshpass が未導入のため無視されます。apt install sshpass で導入するか、鍵認証を使ってください。', diagnostics: diag };
+    return { ok: false, error: 'パスワード認証できません: sshpass が未導入のため無視されます。apt install sshpass で導入するか、鍵認証を使ってください。', diagnostics: diag , needSshpassInstall: true };
   }
   const dest = bkSshDest(ssh);
   try {
@@ -2119,8 +2120,26 @@ app.post('/api/backup/ssh-test', async (req, res) => {
     const ssh = bkSshFromBody(req.body || {});
     const r = await bkTestSsh(ssh);
     if (r.ok) res.json({ success: true, message: r.message, diagnostics: r.diagnostics });
-    else res.json({ success: false, error: r.error, diagnostics: r.diagnostics });
+    else res.json({ success: false, error: r.error, diagnostics: r.diagnostics, needSshpassInstall: !!r.needSshpassInstall });
   } catch (e) { sendErr(res, e.message, e.status || 500); }
+});
+
+app.post('/api/backup/sshpass/install', async (req, res) => {
+  try {
+    if (bkHas('sshpass')) return res.json({ success: true, message: 'sshpass はすでにインストールされています', alreadyInstalled: true });
+    if (bkSshpassInstalling) return sendErr(res, 'インストールがすでに進行中です', 409);
+    bkSshpassInstalling = true;
+    try {
+      await sh('apt-get', ['update'], { timeout: 600000 });
+      await sh('bash', ['-c', 'DEBIAN_FRONTEND=noninteractive apt-get install -y sshpass'], { timeout: 1800000 });
+      if (!bkHas('sshpass')) return sendErr(res, 'インストールを実行しましたが sshpass が見つかりません');
+      res.json({ success: true, message: 'sshpass をインストールしました' });
+    } finally {
+      bkSshpassInstalling = false;
+    }
+  } catch (e) {
+    sendErr(res, (e.stderr || e.stdout || e.message || String(e)).toString().slice(0, 500));
+  }
 });
 
 app.post('/api/backup/target-check', async (req, res) => {
