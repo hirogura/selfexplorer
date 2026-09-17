@@ -2150,13 +2150,19 @@ app.post('/api/backup/config', (req, res) => {
       if ('intervalSec' in body.watch) merged.intervalSec = body.watch.intervalSec;
       if ('times' in body.watch) merged.times = body.watch.times;
       if ('days' in body.watch) merged.days = body.watch.days;
+      /* スケジュール (mode/intervalSec/times/days) が更新されたら自動で監視ONにする。
+         「時刻を指定して保存したのに実行されない」事故を防ぐため。
+         明示的な停止は /api/backup/watch (enabled:false) で行う。 */
+      if ('mode' in body.watch || 'intervalSec' in body.watch || 'times' in body.watch || 'days' in body.watch) {
+        merged.enabled = true;
+      }
       cfg.watch = bkNormWatch(merged);
     }
     const err = bkValidate(cfg, false);
     if (err) return sendErr(res, err);
     bkSave(cfg);
     bkSetWatch(!!cfg.watch.enabled);
-    res.json({ success: true });
+    res.json({ success: true, watching: !!cfg.watch.enabled });
   } catch (e) { sendErr(res, e.message, e.status || 500); }
 });
 
