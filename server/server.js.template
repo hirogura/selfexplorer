@@ -504,6 +504,14 @@ app.post('/api/createfile', (req, res) => {
   }
 });
 
+/* multer/busboy は multipart のファイル名を latin1 としてデコードするため、
+   日本語等のマルチバイト文字が文字化けする。UTF-8 に戻して復元する。 */
+function decodeUploadName(name) {
+  try {
+    return Buffer.from(String(name || ''), 'latin1').toString('utf8');
+  } catch (e) { return String(name || ''); }
+}
+
 const uploader = multer({
   storage: multer.diskStorage({
     destination: (req, file, cb) => {
@@ -514,7 +522,7 @@ const uploader = multer({
       } catch (e) { cb(e); }
     },
     filename: (req, file, cb) => {
-      let n = path.basename(file.originalname).replace(/[\\/:*?"<>|]/g, '_');
+      let n = path.basename(decodeUploadName(file.originalname)).replace(/[\\/:*?"<>|]/g, '_');
       if (!n || n === '.' || n === '..') n = 'upload';
       cb(null, n);
     }
