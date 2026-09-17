@@ -1652,7 +1652,8 @@ app.post('/api/samba/autostart', async (req, res) => {
 /* ── バックアップ（rsync + SSH。selfphoto のバックアップ機能と同方式） ──
    ソース複数・ターゲット1箇所。フォルダ構成を維持するため
    ターゲット配下にソース相対パスごとにコピーする。
-   固定オプション: -r -t -u -v --progress（除外: .upload-tmp/）。 */
+   固定オプション: -r -t -u -v --progress（除外: .upload-tmp/）。
+   ミラーリングON時は --delete を追加し、ソースに無いファイルを削除する。 */
 const BK_FILE = '/var/lib/selfexplorer/backup.json';
 const BK_FIXED_OPTS = ['-r', '-t', '-u', '-v', '--progress'];
 const BK_EXCLUDE = '.upload-tmp/';
@@ -1678,6 +1679,7 @@ function bkDefaultConfig() {
   return {
     sources: [],
     target: '',
+    mirror: false,
     ssh: { enabled: false, host: '', user: '', port: '22', key: '', password: '' },
     watch: { enabled: false, mode: 'interval', intervalSec: BK_DEFAULT_INTERVAL,
       times: BK_DEFAULT_TIMES.slice(), days: BK_DEFAULT_DAYS.slice() },
@@ -1693,6 +1695,7 @@ function bkLoad() {
       if (saved && typeof saved === 'object') {
         if (Array.isArray(saved.sources)) cfg.sources = saved.sources.filter(s => typeof s === 'string');
         if (typeof saved.target === 'string') cfg.target = saved.target;
+        if ('mirror' in saved) cfg.mirror = !!saved.mirror;
         if (saved.ssh && typeof saved.ssh === 'object') {
           for (const k of ['enabled', 'host', 'user', 'port', 'key', 'password']) {
             if (k in saved.ssh) cfg.ssh[k] = k === 'enabled' ? !!saved.ssh[k] : String(saved.ssh[k] || '');
@@ -1980,6 +1983,7 @@ function bkBuildJobs(cfg) {
       dest = path.join(tgt, rel) + '/';
     }
     let argv = ['rsync'].concat(BK_FIXED_OPTS).concat(['--exclude=' + BK_EXCLUDE]);
+    if (cfg.mirror) argv.push('--delete');
     if (sshCmd) argv = argv.concat(['-e', sshCmd]);
     if (Object.keys(envAdd).length) argv = ['sshpass', '-e'].concat(argv);
     argv = argv.concat([srcAbs, dest]);
@@ -2148,7 +2152,7 @@ app.get('/api/backup/config', (req, res) => {
   try {
     const cfg = bkLoad();
     const ssh = Object.assign({}, cfg.ssh, { password: cfg.ssh.password ? '****' : '' });
-    res.json({ success: true, sources: cfg.sources, target: cfg.target, ssh, watch: cfg.watch,
+    res.json({ success: true, sources: cfg.sources, target: cfg.target, mirror: !!cfg.mirror, ssh, watch: cfg.watch,
       fixedOptions: BK_FIXED_OPTS, exclude: BK_EXCLUDE, intervals: BK_INTERVALS,
       rsyncAvailable: bkHas('rsync'), watching: !!bkWatchTimer, lastRun: bkLastRun || cfg.lastRun || null });
   } catch (e) { sendErr(res, e.message, e.status || 500); }
@@ -2160,6 +2164,7 @@ app.post('/api/backup/config', (req, res) => {
     const cfg = bkLoad();
     if ('sources' in body) cfg.sources = bkNormSources(body.sources);
     if ('target' in body && typeof body.target === 'string') cfg.target = body.target.trim();
+    if ('mirror' in body) cfg.mirror = !!body.mirror;
     if (body.ssh && typeof body.ssh === 'object') cfg.ssh = bkSshFromBody(body);
     if (body.watch && typeof body.watch === 'object') {
       const merged = Object.assign({}, cfg.watch);
