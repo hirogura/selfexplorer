@@ -505,26 +505,90 @@ app.post('/api/createfile', (req, res) => {
 });
 
 /* multer/busboy は multipart のファイル名を latin1 としてデコードするため、
-   日本語等のマルチバイト文字が文字化けする。UTF-8 に戻して復元する。 */
+   日本語等のマルチバイト文字が文字化けする。UTF-8 に戻して復元する。
+   ただし既に正しい UTF-8 文字列の場合はそのまま返す（往復チェックで判定）。 */
 function decodeUploadName(name) {
+  const s = String(name || '');
   try {
-    return Buffer.from(String(name || ''), 'latin1').toString('utf8');
-  } catch (e) { return String(name || ''); }
+    const d = Buffer.from(s, 'latin1').toString('utf8');
+    if (Buffer.from(d, 'utf8').toString('latin1') === s) return d;
+  } catch (e) {}
+  return s;
+}
+
+function sanitizeUploadSegment(s) {
+  const n = String(s || '').replace(/[\\:*?"<>|]/g, '_').trim();
+  if (!n || n === '.' || n === '..') return '';
+  return n;
+}
+
+/* multipart のファイル名に含まれる相対パス（フォルダアップロード時）を
+   取り出し、サニタイズした [dirSegments, baseName] を返す。
+   通常ファイルの場合は dirSegments が空になる。 */
+function parseUploadRel(originalname) {
+  const decoded = decodeUploadName(originalname);
+  const parts = String(decoded || '').split('/').map(p => p.trim()).filter(p => p !== '');
+  const segs = [];
+  for (const p of parts) {
+    if (p === '.' || p === '..') continue;
+    const s = sanitizeUploadSegment(p);
+    if (s) segs.push(s);
+  }
+  if (!segs.length) return { dirs: [], base: 'upload' };
+  return { dirs: segs.slice(0, -1), base: segs[segs.length - 1] };
+}
+
+function resolveUploadDir(base, dirs) {
+  let target = base;
+  for (const d of dirs) {
+    target = path.join(target, d);
+  }
+  const check = path.relative(base, target);
+  if (check === '..' || check.startsWith('..' + path.sep) || path.isAbsolute(check)) {
+    throw new Error('Invalid path');
+  }
+  fs.mkdirSync(target, { recursive: true });
+  return target;
+}
+
+/* フォルダアップロード用: クライアントは各ファイルの相対パスを
+   テキストフィールド paths（JSON 配列または複数フィールド）で送る。
+   busboy/multer が originalname のディレクトリ部分を落とすため。 */
+function uploadPathsOf(req) {
+  try {
+    const raw = req.body && req.body.paths;
+    if (Array.isArray(raw)) return raw.map(String);
+    if (typeof raw === 'string' && raw !== '') {
+      try {
+        const arr = JSON.parse(raw);
+        if (Array.isArray(arr)) return arr.map(String);
+      } catch (e) { return [raw]; }
+    }
+  } catch (e) {}
+  return [];
 }
 
 const uploader = multer({
   storage: multer.diskStorage({
     destination: (req, file, cb) => {
       try {
-        const dir = safeResolve(req.query.path);
-        if (!isDir(dir)) return cb(new Error('アップロード先がフォルダではありません'));
-        cb(null, dir);
+        const base = safeResolve(req.query.path);
+        if (!isDir(base)) return cb(new Error('アップロード先がフォルダではありません'));
+        /* ファイルと paths は送信順に対応する。destination→filename の順に
+           呼ばれるためキューで受け渡す。paths が無ければ originalname を使用。 */
+        const paths = uploadPathsOf(req);
+        const idx = req._uploadIdx || 0;
+        req._uploadIdx = idx + 1;
+        const src = idx < paths.length ? paths[idx] : file.originalname;
+        const rel = parseUploadRel(src);
+        req._uploadRels = req._uploadRels || [];
+        req._uploadRels.push(rel);
+        cb(null, resolveUploadDir(base, rel.dirs));
       } catch (e) { cb(e); }
     },
     filename: (req, file, cb) => {
-      let n = path.basename(decodeUploadName(file.originalname)).replace(/[\\/:*?"<>|]/g, '_');
-      if (!n || n === '.' || n === '..') n = 'upload';
-      cb(null, n);
+      const rel = (req._uploadRels && req._uploadRels.shift()) || parseUploadRel(file.originalname);
+      cb(null, rel.base);
     }
   }),
   limits: { fileSize: 2 * 1024 * 1024 * 1024 }
@@ -535,6 +599,29 @@ app.post('/api/upload', (req, res) => {
     if (err) return sendErr(res, err.message);
     res.json({ success: true });
   });
+});
+
+/* 空フォルダ等を再帰的に作成（フォルダアップロード時の D&D 走査用） */
+app.post('/api/mkdirp', (req, res) => {
+  try {
+    const base = safeResolve(req.body.path);
+    if (!isDir(base)) return sendErr(res, 'フォルダではありません');
+    const dirs = Array.isArray(req.body.dirs) ? req.body.dirs : [];
+    let created = 0;
+    for (const d of dirs) {
+      const raw = String(d || '').split('/');
+      if (raw.some(p => p.trim() === '..')) continue;
+      const parts = raw.map(p => p.trim())
+        .filter(p => p !== '' && p !== '.')
+        .map(sanitizeUploadSegment).filter(Boolean);
+      if (!parts.length) continue;
+      resolveUploadDir(base, parts);
+      created++;
+    }
+    res.json({ success: true, created });
+  } catch (e) {
+    sendErr(res, e.message, e.status || 400);
+  }
 });
 
 app.get('/api/info', (req, res) => {
