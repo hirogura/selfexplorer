@@ -1661,7 +1661,7 @@ const BK_DEFAULT_INTERVAL = 300;
 const BK_WATCH_MODES = ['interval', 'time'];
 const BK_DEFAULT_TIMES = ['02:00'];
 const BK_DEFAULT_DAYS = [0, 1, 2, 3, 4, 5, 6];
-const BK_TIME_POLL_SEC = 30;
+const BK_TIME_POLL_SEC = 15;
 const BK_SSH_TIMEOUT = 20000;
 let bkRunning = false;
 let bkLastRun = null;
@@ -1701,7 +1701,10 @@ function bkLoad() {
         if (saved.watch && typeof saved.watch === 'object') {
           cfg.watch = bkNormWatch(Object.assign({}, cfg.watch, saved.watch));
         }
-        if (saved.lastRun && typeof saved.lastRun === 'object') { cfg.lastRun = saved.lastRun; bkLastRun = saved.lastRun; }
+        /* bkLoad は純粋な読み取り専用にする。以前はここで bkLastRun を上書きしており、
+           bkFinish() 内の bkLoad() が確定直後の実行結果をディスクの古い値で
+           消し去っていた（初回実行の記録だけが残り続け、2回目以降がUIに反映されない）。 */
+        if (saved.lastRun && typeof saved.lastRun === 'object') { cfg.lastRun = saved.lastRun; }
       }
     }
   } catch (e) {}
@@ -2042,6 +2045,11 @@ async function bkRunOnce(detail) {
       if (r.code !== 0) fail++;
     }
     return bkFinish(fail === 0, fail === 0 ? 0 : 1, allLog, started, detail);
+  } catch (e) {
+    /* 予期せぬ例外も握りつぶさず、失敗として記録＋ログに残す。
+       （従来は .catch(()=>{}) で消え、lastRun が更新されず原因不明になっていた） */
+    try { console.error('Backup run failed: ' + ((e && e.stack) || e)); } catch (_) {}
+    return bkFinish(false, -1, 'exception: ' + String((e && e.message) || e).slice(0, 2000), started, detail);
   } finally {
     bkRunning = false;
   }
@@ -2081,22 +2089,32 @@ function bkNowHM() {
   return { hm, wday: n.getDay(), key: n.getFullYear() + '-' + (n.getMonth() + 1) + '-' + n.getDate() + ' ' + hm };
 }
 
+function bkTimeTick() {
+  if (bkRunning) return;
+  let w2;
+  try { w2 = bkCurrentWatch(); } catch (e) { return; }
+  if (!w2.enabled || w2.mode !== 'time') return;
+  const now = bkNowHM();
+  if (!bkTimeMatches(now.hm, now.wday, w2.times, w2.days)) return;
+  if (bkLastFiredMinute === now.key) return;
+  bkLastFiredMinute = now.key;
+  console.log('Backup watch-time matched ' + now.key + ' -> starting backup');
+  bkRunOnce('watch-time').catch(() => {});
+}
+
 function bkSetWatch(enabled) {
   if (bkWatchTimer) { clearInterval(bkWatchTimer); bkWatchTimer = null; }
   if (enabled) {
     const w = bkCurrentWatch();
     if (w.mode === 'time') {
-      bkLastFiredMinute = null;
-      bkWatchTimer = setInterval(() => {
-        if (bkRunning) return;
-        const w2 = bkCurrentWatch();
-        if (!w2.enabled || w2.mode !== 'time') return;
-        const now = bkNowHM();
-        if (!bkTimeMatches(now.hm, now.wday, w2.times, w2.days)) return;
-        if (bkLastFiredMinute === now.key) return;
-        bkLastFiredMinute = now.key;
-        bkRunOnce('watch-time').catch(() => {});
-      }, BK_TIME_POLL_SEC * 1000);
+      /* bkLastFiredMinute はここでリセットしない。保存し直し直後の同一分による
+         二重実行を防ぐため（キーに日付+時刻を含むので日またぎの誤抑止は起きない）。 */
+      console.log('Backup watch-time started: times=' + w.times.join(',') + ' days=' + w.days.join(','));
+      bkWatchTimer = setInterval(bkTimeTick, BK_TIME_POLL_SEC * 1000);
+      /* 保存・起動直後に即時判定する。対象分内に保存（例: 12:29:07に12:29を保存）や
+         対象分内の再起動でも、30秒後の初回ポーリングを待たずその場で実行される。
+         従来は初回ポーリングが対象分を外すと黙って翌日送りになっていた。 */
+      bkTimeTick();
     } else {
       const sec = BK_INTERVALS.includes(w.intervalSec) ? w.intervalSec : BK_DEFAULT_INTERVAL;
       bkWatchTimer = setInterval(() => { if (!bkRunning) bkRunOnce('watch').catch(() => {}); }, sec * 1000);
@@ -2271,6 +2289,9 @@ async function bootRestoreWeb() {
   }
   console.error('Web server auto-start gave up for folder: ' + saved.folder);
 }
+
+/* 起動時に前回の実行結果をメモリへ1回だけ復元する（bkLoad は副作用なしのためここで行う） */
+try { bkLastRun = bkLoad().lastRun || null; } catch (e) { bkLastRun = null; }
 
 app.listen(PORT, HOST, () => {
   console.log(`SelfExplorer listening on http://${HOST}:${PORT}`);
